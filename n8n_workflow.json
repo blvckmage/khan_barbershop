@@ -1,0 +1,1273 @@
+{
+  "name": "WhatsApp Khan Barbershop",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=User Input: {{ $json.body.user_input }}\nUser Phone Number: {{ $json.body.user_phone }}",
+        "options": {
+          "systemMessage": "=Ты — виртуальный ассистент барбершопа «KHAN» по адресу Момышулы 55.\nТвоя задача — консультировать клиентов и записывать их на свободные окошки мастеров.\nТы должен быть вежливым, уверенным и предлагать удобное время и мастера.\nОтвечай клиенту коротко, но уверенно.\nТы умеешь работать с датами, временем и таблицей доступных записей (Master Available Times и Google Sheets).\nДеньги указываешь в тенге.\nНе отправляй staff_id и service_id ��лиенту.\nВ приветствии не нужно много слов, просто представься, что ты чатбот и спроси, к кому хочет записаться клиент.\nВсю информацию о мастерах, услугах и ценах ты должен брать из инструментов \"get staff_id\", \"Get service_id, seance_lenght and price\", \"get services\".\nВсегда сначала проверяй, кто из мастеров выполняет услугу, на которую хочет записаться клиент.\nПеред тем, как предложить мастера клиенту проверь, выполняет ли он услугу, выбранную клиентом.\nПредлагай мастеров по убыванию их мастерства, то есть в приоритете \"Топ-барберы\", ниже \"Барберы\" и самый низкий приоритет имеют \"Джуниор-барберы\".\nЕсли клиент хочет отменить или перенести запись, говори ему, чтобы он звонил на номер 87071272796.\nЕсли спрашивают про цены, то вызывай инструмент \"get services\", проанализируй все услуги и дай ответ.\n🗓️ 1. Определение даты записи\nЕсли пользователь спрашивает, свободен ли мастер на какую то дату, то спроси, на какую услугу хочет записаться клиент и затем уже проверяй доступность мастера на выбранную дату.\nЕсли пользователь указал время и дату, но не указал мастера, то используй инструмент \"Get Available Masters for Date/time\" чтобы узнать, кто из мастеров свободен для записи на выбранную дату/время. Если он указал только дату, то попроси еще и время для записи.\nЕсли мастер доступен в выбранную клиентом дату, то проверь, какие доступные окошки есть и предложи их клиенту.\nПользователь вводит дату (иногда с временем).\nИгнорируй время — анализируй только дату.\nОтсчёт начинай с сегодняшнего дня: {{$now}}.\nЕсли пользователь написал число (например, \"5\"), это день месяца, на который он хочет записаться.\nЕсли это число уже прошло в текущем месяце — предлагай то же число следующего месяца.\nЕсли пользователь написал сегодняшнее число — возвращай только сегодняшнюю дату.\n⏰ 2. Определение времени записи\nТы можешь делать записи только на времена, кратные 30 минут. То есть можешь делать записи на времена типа 13:30 или 17:00, но на времена, не кратные 30 минутам, вроде 12:15 или 10:40 не можешь. Предлагай клиенту только времена, кратные 30 минутам.\nЕсли пользователь просит записать на определенное число, ты должен проверить, какие свободные окошки есть в этот день используя инструмент Get Available Times.\nПользователь может указать время (например, \"в 3\", \"на 5 часов\").\nЕсли выбранное клиентом окошко свободно, то попроси имя для записи.\nЕсли клиент указал утреннее время (1–7), переведи его в обеденное по таблице:\nВвод клиента\tПеревод в часы\n1 → 13:00\t\n2 → 14:00\t\n3 → 15:00\t\n4 → 16:00\t\n5 → 17:00\t\n6 → 18:00\t\n7 → 19:00\n1:30 → 13:30\t\n2:30 → 14:30\t\n3:30 → 15:30\t\n4:30 → 16:30\t\n5:30 → 17:30\t\n6:30 → 18:30\t\n7:30 → 19:30\t\n💈 3. Получение данных о мастере и услуге\nИспользуй \"Get services\" чтобы получить список всех доступных услуг.\nИспользуй данные из Google Sheets (или таблицы Master Available Times).\nНайди совпадение по названию услуги и мастера, на которого хочет записаться клиент.\n4. Ошибки из output инструментов\nЕсли получаешь какую либо ошибку в инструменте \"Create a New Appointment\", ты должен проанализировать его.\nЕсли ты получил ошибку в инструменте \"Create a New Appointment\", попробуй использовать другие parameterValue.\nЕсли же смена parameterValue не помогает, возвращай ошибку и проси позвонить на номер 8(707)-127-2796.\nЕсли AI Tool ничего не вернул или же вернул пустое, ты должен попробовать использовать этот же инструмент, но используя другие parameterValue, возможно ты просто ошибся в parameterValue и поэтому этот инструмент ничего не вернул.\nЕсли после вставки имени в инструмент \"Get get services by staff_name or staff_id\" он ничего не вернул, то попробуй вызвать инструмент \"Get staff names and ids\" и получить оттуда список всех имен мастеров. И затем сравни имя, которое тебе дал клиент со списком мастеров и выбери самый подходящий. Затем отправь клиенту самое подходящее имя и переспроси, этот ли мастер.\nИспользуй инструмент \"Get Available Masters for Date/time\" чтобы получить список с мастерами, доступными к записи на выбранную клиентом дату или дату и время.\n\n5. Сценарии:\nа) Клиент спрашивает, кто свободен на выбранное время\nЕсли клиент выбрал только дату (например сегодня или завтра), то спроси у него еще и время, на которое он хочет записаться.\nЕсли клиент хочет узнать, какие мастера свободны в определённые дату и время:\nВызови инструмент:\nGet Available Masters for Date/Time\nПолучи список мастеров.\nОтфильтруй только тех, у кого:\n\"bookable\": true\nДай клиенту список доступных мастеров в человеко-читаемом виде.\nСпроси:\n«К кому вы хотите записаться?»\nПосле выбора мастера — спроси услугу\nКогда клиент выбирает мастера:\n«На какую услугу хотите записаться?»\nПосле ответа — вызови инструмент:\nGet Services by staff_name\nПолучи список услуг мастера.\nНайди в ответе услугу, которая совпадает с введённым клиентом названием (поле name или наиболее близкое совпадение).\nПодтверди клиенту выбранную услугу и спроси:\n«Как вас зовут для записи?»\nПосле получения имени — создать запись\nКогда клиент вводит имя:\nВызови инструмент:\nCreate a New Appointment\nРазбор результата создания записи\nПосле вызова инструмента \"Create a New Appointment\":\nЕсли ответ содержит\n\"success\": true\n👉 Ответь клиенту:\n«Успешная запись!»\nЕсли инструмент ничего не вернул\n👉 Ответь:\n«Произошла ошибка при создании записи. Попробуйте, пожалуйста, снова.»\nОбщие правила диалога\nНе придумывай данные.\nВсегда основывайся только на ответах инструментов.\nЕсли данных недостаточно — задавай уточняющий вопрос.\nНикогда не вызывай инструмент без необходимости.\nОтвечай вежливо, чётко и коротко."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.1,
+      "position": [
+        5264,
+        1136
+      ],
+      "id": "58f3c3eb-2fce-44a9-97e5-3aa0e863a189",
+      "name": "AI Agent4"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        4896,
+        1488
+      ],
+      "id": "0ce87833-354a-4c9e-8c41-912054ce4ce0",
+      "name": "DeepSeek Chat Model4",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "G7DzOq1595DXYOp4",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook for Main Chatbot').item.json.body.user_phone+1}}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        5104,
+        1424
+      ],
+      "id": "ae4b6e51-0cfb-43eb-9d1d-7c3b620b2b95",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa_khan_main_chatbot",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        5088,
+        1136
+      ],
+      "id": "aa794a55-a06d-4b28-905c-23d517ef94a6",
+      "name": "Webhook for Main Chatbot",
+      "webhookId": "ad98dd66-3e1a-4677-b1aa-cdd23c23c456"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa_khan_main_chatbot_extended",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        5120,
+        832
+      ],
+      "id": "4c1ff7aa-add4-4940-aced-51b196b1d55d",
+      "name": "Webhook for Main Chatbot Extended",
+      "webhookId": "ad98dd66-3e1a-4677-b1aa-cdd23c23c456"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        5824,
+        1136
+      ],
+      "id": "bfb4ce1e-62e6-453b-8af2-8512c2aeb528",
+      "name": "Respond to Webhook19"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        5696,
+        832
+      ],
+      "id": "5855e4b0-600e-4619-aa50-f8fa32ef5659",
+      "name": "Respond to Webhook20"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available dates for booking for the chosen barber. Use it to get which dates the chosen barber is available for booking.",
+        "url": "https://api.alteg.io/api/v1/book_dates/1097365",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "staff_id",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters0_Value', ``, 'string') }}"
+            },
+            {
+              "name": "service_ids[]",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters1_Value', `If you don't now, which service did the user choose, you must ask him about it and provide some list of services that the chosen master provide. You must use not the names of services but the ids that you will get from Google Sheets Tool`, 'string') }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5616,
+        1632
+      ],
+      "id": "6d9f97bd-75d9-46d5-8f74-62609696cd1a",
+      "name": "Get Available Dates"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available times for a date for a barber. You use it to get in which time interval for chosen day the chosen barber is available for booking.",
+        "url": "={{\n$fromAI(\n  'final_payload',\n  `\nYou are generating a URL for searching for available times for booking for chosen master.\nInsert values STRICTLY following the variable descriptions that you need to get from \"Get get services by staff_name\" tool:\n\nVARIABLES:\n- $json.staff_id → ID of the selected staff member, STRICTLY get from tool \"Get get services by staff_name\"\n- $json.service_id → ID of the service the client chose, STRICTLY get from tool \"Get get services by staff_name\"\n- $json.datetime → ISO date+time for appointment start, example: 2025-12-04T10:00:00.\n\nNow create valid URL:\n\n  \"https://api.alteg.io/api/v1/book_times/1097365/{STAFF_ID}/{DATE}?service_ids[]={SERVICE_ID}\" `,\n  'string'\n) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5744,
+        1616
+      ],
+      "id": "bac1f386-2a94-419d-b63c-78a2db409ec3",
+      "name": "Get Available Times"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "dUWtvvMI1op5LtIH",
+          "mode": "list",
+          "cachedResultName": "Khan Barbershop",
+          "cachedResultUrl": "/projects/wAyyizNlkHNrgkrS/datatables/dUWtvvMI1op5LtIH"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "1"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "text": "={{ $json.output }}"
+          },
+          "matchingColumns": [
+            "text"
+          ],
+          "schema": [
+            {
+              "id": "text",
+              "displayName": "text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        5552,
+        1136
+      ],
+      "id": "eaeaaebd-7253-4480-a4d6-5d2f9f5857d0",
+      "name": "Update row(s)"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "dUWtvvMI1op5LtIH",
+          "mode": "list",
+          "cachedResultName": "Khan Barbershop",
+          "cachedResultUrl": "/projects/wAyyizNlkHNrgkrS/datatables/dUWtvvMI1op5LtIH"
+        },
+        "limit": 1
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        5392,
+        832
+      ],
+      "id": "f6dce7a0-ee7a-4d46-811b-9102e2a262c8",
+      "name": "Get row(s)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b62c8c2f-3917-4ccd-940e-084f4e0934bb",
+              "name": "output",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5536,
+        832
+      ],
+      "id": "d64a86c6-84cf-4e5d-be94-5371f9567566",
+      "name": "Edit Fields4"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b62c8c2f-3917-4ccd-940e-084f4e0934bb",
+              "name": "output",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5680,
+        1136
+      ],
+      "id": "b0108745-d36e-4419-98e7-8c374c82b14d",
+      "name": "Edit Fields6"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "responsesApiEnabled": false,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        5024,
+        1328
+      ],
+      "id": "f16d03c3-c90e-4078-b87a-840df79615d2",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "p2GoHPTPR9kFqPRz",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get staff names and ids",
+        "documentId": {
+          "__rl": true,
+          "value": "1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4",
+          "mode": "list",
+          "cachedResultName": "Staff",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 173481379,
+          "mode": "list",
+          "cachedResultName": "staff",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4/edit#gid=173481379"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5264,
+        1408
+      ],
+      "id": "01378d23-b9b0-4c90-83fb-6787b00145e6",
+      "name": "Get staff names and ids",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        5264,
+        832
+      ],
+      "id": "d2c6e337-9c10-4b32-9597-621c66e4c66c",
+      "name": "Wait",
+      "webhookId": "6f20253c-16fe-42f3-8389-c5f6386d0771"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that creates a new appointment",
+        "method": "POST",
+        "url": "https://api.alteg.io/api/v1/records/1097365",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n$fromAI(\n  'final_payload',\n  `\nYou are generating a JSON payload for booking creation.\nInsert values STRICTLY following the variable descriptions that you need to get from \"Get get services by staff_name\" tool:\n\nVARIABLES:\n- $json.staff_id → ID of the selected staff member.\n- $json.service_id → ID of the service the client chose.\n- $json.people_count → number of people in the appointment.\n- $json.client_phone → $json.body.user_phone.\n- $json.client_name → full name of the client.\n- $json.datetime → ISO date+time for appointment start, example: 2025-12-04T10:00:00.\n- $json.seance_length → appointment length in seconds.\n\nNow create valid JSON:\n\n{\n  \"staff_id\": \"${$json.staff_id}\",\n  \"services\": [\n    {\n      \"id\": \"${$json.service_id}\",\n      \"amount\": ${$json.people_count}\n    }\n  ],\n  \"client\": {\n    \"phone\": \"${$json.client_phone}\",\n    \"name\": \"${$json.client_name}\"\n  },\n  \"datetime\": \"${$json.datetime}\",\n  \"seance_length\": \"${$json.seance_length}\",\n  \"comment\": \"ЗАПИСЬ СДЕЛАНА ЧЕРЕЗ БОТА!!!\"\n}\n`,\n'string'\n)\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5888,
+        1408
+      ],
+      "id": "f0420872-de8b-42b7-9d09-0f5d6a73c0a8",
+      "name": "Create a New Appointment"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Используй, чтобы получить список всех доступных услуг и мастеров. Используй этот инструмент только если у тебя нет никакой информации о том, к какому мастеру хочет записаться клиент. Также проверяй, чтобы staff_name и название услуги совпадало, ведь для каждого мастера есть свой уникальный service_id.",
+        "documentId": {
+          "__rl": true,
+          "value": "18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8",
+          "mode": "list",
+          "cachedResultName": "Services",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 101807303,
+          "mode": "list",
+          "cachedResultName": "Worksheet",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit#gid=101807303"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5456,
+        1552
+      ],
+      "id": "83af921b-f662-469b-be84-2c1fc345d384",
+      "name": "Get all services",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get staff_id, service_id, seance_lenght and price by staff_name",
+        "documentId": {
+          "__rl": true,
+          "value": "18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8",
+          "mode": "list",
+          "cachedResultName": "Services",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 101807303,
+          "mode": "list",
+          "cachedResultName": "Worksheet",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit#gid=101807303"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Staff Name",
+              "lookupValue": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('values1_Value', `Staff's name`, 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5328,
+        1568
+      ],
+      "id": "c17a86ea-d158-4ce7-9f60-2af3732f83f2",
+      "name": "Get get services by staff_name",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available masters for the chosen date or datetime. Only masters with \"bookable\": true are available. You need to use full datetime in ISO format. Example: 2025-12-09T10:00:00. If you know only the date, then you need to ask client about the booking time.",
+        "url": "={{\n$fromAI(\n  'final_payload',\n  `\nReturn ONLY this URL, nothing else. Use date in ISO format. Example: 2025-12-10T12:00:00.\nhttps://api.alteg.io/api/v1/book_staff/1097365?datetime=${$json.datetime}\n`,\n  'string'\n)\n}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5904,
+        1616
+      ],
+      "id": "52b62dae-3326-412f-9310-d625e0ee1d4a",
+      "name": "Get Available Masters for Date/time"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=User Input: {{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "=Ты — виртуальный ассистент барбершопа «Хан».\nТвоя задача — консультировать клиентов и записывать их на свободные окошки мастеров.\nТы должен быть вежливым, уверенным и предлагать удобное время и мастера.\nОтвечай клиенту коротко, но уверенно.\nТы умеешь работать с датами, временем и таблицей доступных записей (Master Available Times и Google Sheets).\nДеньги указываешь в тенге.\nНе отправляй staff_id и service_id клиенту.\nВ приветствии не нужно много слов, просто представься, что ты чатбот и спроси, к кому хочет записаться клиент.\nВсю информацию о мастерах, услугах и ценах ты должен брать из инструментов \"get staff_id\", \"Get service_id, seance_lenght and price\", \"get services\".\nВсегда сначала проверяй, кто из мастеров выполняет услугу, на которую хочет записаться клиент.\nПеред тем, как предложить мастера клиенту проверь, выполняет ли он услугу, выбранную клиентом.\nПредлагай мастеров по убыванию их мастерства, то есть в приоритете \"Топ-барберы\", ниже \"Барберы\" и самый низкий приоритет имеют \"Джуниор-барберы\".\nЕсли клиент хочет отменить или перенести запись, говори ему, чтобы он звонил на номер 87071272796.\nЕсли спрашивают про цены, то вызывай инструмент \"get services\", проанализируй все услуги и дай ответ.\n🗓️ 1. Определение даты записи\nЕсли пользователь спрашивает, свободен ли мастер на какую то дату, то спроси, на какую услугу хочет записаться клиент и затем уже проверяй доступность мастера на выбранную дату.\nЕсли пользователь указал время и дату, но не указал мастера, то используй инструмент \"Get Available Masters for Date/time\" чтобы узнать, кто из мастеров свободен для записи на выбранную дату/время. Если он указал только дату, то попроси еще и время для записи.\nЕсли мастер доступен в выбранную клиентом дату, то проверь, какие доступные окошки есть и предложи их клиенту.\nПользователь вводит дату (иногда с временем).\nИгнорируй время — анализируй только дату.\nОтсчёт начинай с сегодняшнего дня: {{$now}}.\nЕсли пользователь написал число (например, \"5\"), это день месяца, на который он хочет записаться.\nЕсли это число уже прошло в текущем месяце — предлагай то же число следующего месяца.\nЕсли пользователь написал сегодняшнее число — возвращай только сегодняшнюю дату.\n⏰ 2. Определение времени записи\nЕсли пользователь просит записать на определенное число, ты должен проверить, какие свободные окошки есть в этот день используя инструмент Get Available Times.\nПользователь может указать время (например, \"в 3\", \"на 5 часов\").\nЕсли выбранное клиентом окошко свободно, то попроси имя для записи.\nЕсли клиент указал утреннее время (1–7), переведи его в обеденное по таблице:\nВвод клиента\tПеревод в часы\n1 → 13:00\t\n2 → 14:00\t\n3 → 15:00\t\n4 → 16:00\t\n5 → 17:00\t\n6 → 18:00\t\n7 → 19:00\t\n💈 3. Получение данных о мастере и услуге\nИспользуй \"Get services\" чтобы получить список всех доступных услуг.\nИспользуй данные из Google Sheets (или таблицы Master Available Times).\nНайди совпадение по названию услуги и мастера, на которого хочет записаться клиент.\n4. Ошибки из output инструментов\nЕсли получаешь какую либо ошибку в инструменте \"Create a New Appointment\", ты должен проанализировать его.\nЕсли ты получил ошибку в инструменте \"Create a New Appointment\", попробуй использовать другие parameterValue.\nЕсли же смена parameterValue не помогает, возвращай ошибку и проси позвонить на номер 8(707)-127-2796.\nЕсли AI Tool ничего не вернул или же вернул пустое, ты должен попробовать использовать этот же инструмент, но используя другие parameterValue, возможно ты просто ошибся в parameterValue и поэтому этот инструмент ничего не вернул.\nЕсли после вставки имени в инструмент \"Get get services by staff_name or staff_id\" он ничего не вернул, то попробуй вызвать инструмент \"Get staff names and ids\" и получить оттуда список всех имен мастеров. И затем сравни имя, которое тебе дал клиент со списком мастеров и выбери самый подходящий. Затем отправь клиенту самое подходящее имя и переспроси, этот ли мастер.\nИспользуй инструмент \"Get Available Masters for Date/time\" чтобы получить список с мастерами, доступными к записи на выбранную клиентом дату или дату и время.\n\n5. Сценарии:\nа) Клиент спрашивает, кто свободен на выбранное время\nЕсли клиент выбрал только дату (например сегодня или завтра), то спроси у него еще и время, на которое он хочет записаться.\nЕсли клиент хочет узнать, какие мастера свободны в определённые дату и время:\nВызови инструмент:\nGet Available Masters for Date/Time\nПолучи список мастеров.\nОтфильтруй только тех, у кого:\n\"bookable\": true\nДай клиенту список доступных мастеров в человеко-читаемом виде.\nСпроси:\n«К кому вы хотите записаться?»\nПосле выбора мастера — спроси услугу\nКогда клиент выбирает мастера:\n«На какую услугу хотите записаться?»\nПосле ответа — вызови инструмент:\nGet Services by staff_name\nПолучи список услуг мастера.\nНайди в ответе услугу, которая совпадает с введённым клиентом названием (поле name или наиболее близкое совпадение).\nПодтверди клиенту выбранную услугу и спроси:\n«Как вас зовут для записи?»\nПосле получения имени — создать запись\nКогда клиент вводит имя:\nВызови инструмент:\nCreate a New Appointment\nРазбор результата создания записи\nПосле вызова инструмента \"Create a New Appointment\":\nЕсли ответ содержит\n\"success\": true\n👉 Ответь клиенту:\n«Успешная запись!»\nЕсли инструмент ничего не вернул\n👉 Ответь:\n«Произошла ошибка при создании записи. Попробуйте, пожалуйста, снова.»\nОбщие правила диалога\nНе придумывай данные.\nВсегда основывайся только на ответах инструментов.\nЕсли данных недостаточно — задавай уточняющий вопрос.\nНикогда не вызывай инструмент без необходимости.\nОтвечай вежливо, чётко и коротко."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.1,
+      "position": [
+        5360,
+        1968
+      ],
+      "id": "52b516ab-743f-4312-a81f-dacc0392cb7b",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('When chat message received').item.json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        5200,
+        2256
+      ],
+      "id": "c3e1213d-28e7-44e1-a5af-facab651bc00",
+      "name": "Simple Memory1"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available dates for booking for the chosen barber. Use it to get which dates the chosen barber is available for booking.",
+        "url": "https://api.alteg.io/api/v1/book_dates/1097365",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "staff_id",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters0_Value', ``, 'string') }}"
+            },
+            {
+              "name": "service_ids[]",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters1_Value', `If you don't now, which service did the user choose, you must ask him about it and provide some list of services that the chosen master provide. You must use not the names of services but the ids that you will get from Google Sheets Tool`, 'string') }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5712,
+        2464
+      ],
+      "id": "3c117266-072c-4eed-988b-371d5412cf7b",
+      "name": "Get Available Dates1"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available times for a date for a barber. You use it to get in which time interval for chosen day the chosen barber is available for booking.",
+        "url": "={{\n$fromAI(\n  'final_payload',\n  `\nYou are generating a URL for searching for available times for booking for chosen master.\nInsert values STRICTLY following the variable descriptions that you need to get from \"Get get services by staff_name\" tool:\n\nVARIABLES:\n- $json.staff_id → ID of the selected staff member.\n- $json.service_id → ID of the service the client chose.\n- $json.datetime → ISO date+time for appointment start, example: 2025-12-04T10:00:00.\n\nNow create valid URL:\n\n  \"https://api.alteg.io/api/v1/book_times/1097365/{STAFF_ID}/{DATE}?service_ids[]={SERVICE_ID}\" `,\n  'string'\n) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5840,
+        2448
+      ],
+      "id": "054f9188-9aba-4d2c-b6b5-c22ccfc0a027",
+      "name": "Get Available Times1"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "responsesApiEnabled": false,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        5120,
+        2160
+      ],
+      "id": "a219688b-41a8-4316-87b5-2dc3be1d7a8c",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "p2GoHPTPR9kFqPRz",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get staff names and ids",
+        "documentId": {
+          "__rl": true,
+          "value": "1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4",
+          "mode": "list",
+          "cachedResultName": "Staff",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 173481379,
+          "mode": "list",
+          "cachedResultName": "staff",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Yo2ad5fcTsiUtk50o6q10JUbQNyzdV0xV9n2Dl_hQE4/edit#gid=173481379"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5360,
+        2240
+      ],
+      "id": "c681e7ee-0bcb-46c4-bdb0-a1c8d8117f8b",
+      "name": "Get staff names and ids1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that creates a new appointment",
+        "method": "POST",
+        "url": "https://api.alteg.io/api/v1/records/1097365",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n$fromAI(\n  'final_payload',\n  `\nYou are generating a JSON payload for booking creation.\nInsert values STRICTLY following the variable descriptions that you need to get from \"Get get services by staff_name\" tool:\n\nVARIABLES:\n- $json.staff_id → ID of the selected staff member.\n- $json.service_id → ID of the service the client chose.\n- $json.people_count → number of people in the appointment.\n- $json.client_phone → 77077235443.\n- $json.client_name → full name of the client.\n- $json.datetime → ISO date+time for appointment start, example: 2025-12-04T10:00:00.\n- $json.seance_length → appointment length in seconds.\n\nNow create valid JSON:\n\n{\n  \"staff_id\": \"${$json.staff_id}\",\n  \"services\": [\n    {\n      \"id\": \"${$json.service_id}\",\n      \"amount\": ${$json.people_count}\n    }\n  ],\n  \"client\": {\n    \"phone\": \"${$json.client_phone}\",\n    \"name\": \"${$json.client_name}\"\n  },\n  \"datetime\": \"${$json.datetime}\",\n  \"seance_length\": \"${$json.seance_length}\",\n  \"comment\": \"ЗАПИСЬ СДЕЛАНА ЧЕРЕЗ БОТА!!!\"\n}\n`,\n'string'\n)\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        5984,
+        2240
+      ],
+      "id": "32cc7410-0d5b-4f9f-9224-4b5dd7fc3fd5",
+      "name": "Create a New Appointment1"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Используй, чтобы получить список всех доступных услуг и мастеров. Используй этот инструмент только если у тебя нет никакой информации о том, к какому мастеру хочет записаться клиент. Также проверяй, чтобы staff_name и название услуги совпадало, ведь для каждого мастера есть свой уникальный service_id.",
+        "documentId": {
+          "__rl": true,
+          "value": "18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8",
+          "mode": "list",
+          "cachedResultName": "Services",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 101807303,
+          "mode": "list",
+          "cachedResultName": "Worksheet",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit#gid=101807303"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5552,
+        2384
+      ],
+      "id": "cc198e1b-a5d8-4766-8648-ede56a6b6af4",
+      "name": "Get all services1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get staff_id, service_id, seance_lenght and price by staff_name",
+        "documentId": {
+          "__rl": true,
+          "value": "18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8",
+          "mode": "list",
+          "cachedResultName": "Services",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 101807303,
+          "mode": "list",
+          "cachedResultName": "Worksheet",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18RdiSiK4Z6WvdLOFnB2BfgFNyxRO-3PiBihXXAfU9v8/edit#gid=101807303"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Staff Name",
+              "lookupValue": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('values1_Value', `Staff's name`, 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        5424,
+        2400
+      ],
+      "id": "a5014ea0-df04-471d-b100-6611638704a3",
+      "name": "Get get services by staff_name1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "qJZenP91zIcTIrtY",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request that gets all available masters for the chosen datetime. Only masters with \"bookable\": true are available. You need to use full datetime in ISO format. Example: 2025-12-09T10:00:00. If you know only the date, then you need to ask client about the booking time.",
+        "url": "={{\n$fromAI(\n  'final_payload',\n  `\nReturn ONLY this URL, nothing else:\nhttps://api.alteg.io/api/v1/book_staff/1097365?datetime=${$json.datetime}\n`,\n  'string'\n)\n}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.api.v2+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer tyxp2kb4nrj6dc7u83mb, User 0bb97327a31f2d1f3d5bb46893c3ec1b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        6000,
+        2448
+      ],
+      "id": "3fc582e2-10f5-428d-9f90-3375e06c277a",
+      "name": "Get Available Masters for Date/time1"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseMode": "responseNodes"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        5136,
+        1968
+      ],
+      "id": "8088ad30-d0f0-4055-987f-e3cf10d17d06",
+      "name": "When chat message received",
+      "webhookId": "1e1cb676-c87b-4607-81e5-198708f55e08"
+    },
+    {
+      "parameters": {
+        "message": "={{ $json.output }}",
+        "waitUserReply": false,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        5712,
+        1968
+      ],
+      "id": "ba5d2608-a852-4c30-baab-b9578a094f79",
+      "name": "Respond to Chat"
+    }
+  ],
+  "connections": {
+    "AI Agent4": {
+      "main": [
+        [
+          {
+            "node": "Update row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model4": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook for Main Chatbot": {
+      "main": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook for Main Chatbot Extended": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Dates": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Times": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update row(s)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields4": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook20",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields6": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook19",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get staff names and ids": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a New Appointment": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all services": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get get services by staff_name": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Masters for Date/time": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Dates1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Times1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get staff names and ids1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a New Appointment1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all services1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get get services by staff_name1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Masters for Date/time1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {
+    "Webhook for Main Chatbot Extended": [
+      {
+        "json": {
+          "headers": {
+            "host": "balanceacademy.app.n8n.cloud",
+            "user-agent": "ManyChat",
+            "content-length": "111",
+            "accept-encoding": "gzip, br",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "3.74.158.122",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "DE",
+            "cf-ray": "990f675b56db3d4d-FRA",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "x-forwarded-for": "3.74.158.122, 172.70.240.157",
+            "x-forwarded-host": "balanceacademy.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-42-bd54959cf-cbnqh",
+            "x-is-trusted": "yes",
+            "x-real-ip": "3.74.158.122"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "user_input": "Что у вас есть в меню?",
+            "stoplist": "null",
+            "user_phone": "{{wa_id}}"
+          },
+          "webhookUrl": "https://balanceacademy.app.n8n.cloud/webhook/inst_main_chatbot",
+          "executionMode": "production"
+        }
+      }
+    ],
+    "Webhook for Main Chatbot": [
+      {
+        "json": {
+          "headers": {
+            "host": "balanceacademy.app.n8n.cloud",
+            "user-agent": "ManyChat",
+            "content-length": "84",
+            "accept-encoding": "gzip, br",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "3.74.158.122",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "DE",
+            "cf-ray": "9b40923474c8613b-FRA",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "x-forwarded-for": "3.74.158.122, 172.70.240.79",
+            "x-forwarded-host": "balanceacademy.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-94-855644bdd-tp6sn",
+            "x-is-trusted": "yes",
+            "x-real-ip": "3.74.158.122"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "user_input": "6:30 га Элдар бошми",
+            "user_phone": "77085132004"
+          },
+          "webhookUrl": "https://balanceacademy.app.n8n.cloud/webhook/wa_khan_main_chatbot",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "triggerCount": 3,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
