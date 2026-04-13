@@ -22,12 +22,12 @@ import {
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 
-const drawerWidth = 240;
+const drawerWidth = 260;
 
 const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
+  { text: 'Панель управления', icon: <DashboardIcon />, path: '/' },
   { text: 'Логи', icon: <HistoryIcon />, path: '/logs' },
-  { text: 'Рассылки', icon: <SendIcon />, path: '/broadcasts' },
+  { text: 'Настройки рассылки', icon: <SendIcon />, path: '/broadcast-settings' },
 ];
 
 export default function Layout() {

@@ -8,7 +8,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Logs from './pages/Logs';
-import Broadcasts from './pages/Broadcasts';
+import BroadcastSettings from './pages/BroadcastSettings';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,7 +58,7 @@ function App() {
             >
               <Route index element={<Dashboard />} />
               <Route path="logs" element={<Logs />} />
-              <Route path="broadcasts" element={<Broadcasts />} />
+              <Route path="broadcast-settings" element={<BroadcastSettings />} />
             </Route>
           </Routes>
         </BrowserRouter>

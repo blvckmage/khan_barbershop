@@ -171,12 +171,7 @@ async def send_notification(request: dict):
     Request body:
     {
         "phone": "+77071234567",
-        "type": "confirmation|reminder",
-        "client_name": "Имя клиента",
-        "master_name": "Имя мастера",
-        "service_name": "Название услуги",
-        "datetime": "2025-03-01 15:00",
-        "price": "5000"
+        "message": "Ваше сообщение для клиента"
     }
     """
     logger.info(f"📤 Send notification request")
@@ -188,28 +183,14 @@ async def send_notification(request: dict):
         if not phone:
             raise HTTPException(status_code=400, detail="Phone number required")
         
-        if notification_type == "confirmation":
-            result = await twilio_service.send_appointment_confirmation(
-                to=phone,
-                client_name=request.get("client_name", "Клиент"),
-                master_name=request.get("master_name", "Мастер"),
-                service_name=request.get("service_name", "Услуга"),
-                datetime_str=request.get("datetime", ""),
-                price=request.get("price", "0")
-            )
-        elif notification_type == "reminder":
-            result = await twilio_service.send_appointment_reminder(
-                to=phone,
-                client_name=request.get("client_name", "Клиент"),
-                master_name=request.get("master_name", "Мастер"),
-                datetime_str=request.get("datetime", "")
-            )
-        else:
-            # Custom message
-            result = await twilio_service.send_whatsapp_message(
-                to=phone,
-                message=request.get("message", "")
-            )
+        message = request.get("message", "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="Message text is required")
+
+        result = await twilio_service.send_whatsapp_message(
+            to=phone,
+            message=message
+        )
         
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])

@@ -323,6 +323,49 @@ class AlteegioService:
         
         logger.info(f"❌ Client {phone} has no future appointments")
         return False
+    
+    def normalize_phone_number(self, phone: str) -> str:
+        """Normalize client phone numbers for customer base and broadcasts."""
+        if not phone:
+            return ""
+        phone = phone.strip()
+        if phone.startswith("whatsapp:"):
+            phone = phone[len("whatsapp:"):]
+        cleaned = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
+        if cleaned.startswith('+'):
+            return cleaned
+        if cleaned.startswith('8') and len(cleaned) == 11:
+            return f'+7{cleaned[1:]}'
+        if len(cleaned) == 10:
+            return f'+7{cleaned}'
+        if len(cleaned) >= 11 and cleaned.startswith('7'):
+            return f'+{cleaned}'
+        return cleaned
+
+    async def get_clients(self, days: int = 30) -> List[Dict[str, str]]:
+        """Get unique clients from Alteegio records for the last N days."""
+        from datetime import datetime, timedelta
+
+        unique_clients: dict[str, Dict[str, str]] = {}
+        now = datetime.now()
+        for offset in range(days):
+            day = (now - timedelta(days=offset)).strftime("%Y-%m-%d")
+            try:
+                records = await self.get_records(day)
+            except Exception:
+                continue
+            for record in records or []:
+                client = record.get("client") or {}
+                phone = (client.get("phone") or "").strip()
+                name = (client.get("name") or "Клиент").strip()
+                normalized = self.normalize_phone_number(phone)
+                if normalized:
+                    unique_clients[normalized] = {
+                        "phone": normalized,
+                        "name": name or "Клиент"
+                    }
+
+        return list(unique_clients.values())
 
 
 # Singleton instance

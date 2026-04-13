@@ -35,7 +35,12 @@ def init_db():
             phone TEXT DEFAULT '+77771234567',
             address TEXT DEFAULT 'г. Алматы, ул. Примерная, 1',
             working_hours TEXT DEFAULT 'Пн-Вс: 10:00 - 21:00',
-            welcome_message TEXT DEFAULT 'Добро пожаловать в KHAN Barbershop!'
+            welcome_message TEXT DEFAULT 'Добро пожаловать в KHAN Barbershop!',
+            broadcast_enabled INTEGER DEFAULT 0,
+            broadcast_phone_numbers TEXT DEFAULT '',
+            broadcast_message_template TEXT DEFAULT '',
+            broadcast_schedule TEXT DEFAULT 'manual',
+            broadcast_send_time TEXT DEFAULT '10:00'
         )
     ''')
     
@@ -66,6 +71,24 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             message TEXT NOT NULL,
             recipients_count INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'pending',
+            recipients TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    
+    # Broadcast logs
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS broadcast_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broadcast_id INTEGER NOT NULL,
+            phone TEXT NOT NULL,
+            message_sid TEXT,
+            status TEXT NOT NULL,
+            error TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -98,6 +121,34 @@ def init_db():
             UNIQUE(appointment_id, type)
         )
     ''')
+    
+    # Alter existing broadcast table if necessary
+    cursor.execute("PRAGMA table_info(broadcasts)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if 'sent_count' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN sent_count INTEGER DEFAULT 0")
+    if 'failed_count' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN failed_count INTEGER DEFAULT 0")
+    if 'status' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN status TEXT DEFAULT 'pending'")
+    if 'recipients' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN recipients TEXT")
+    if 'completed_at' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN completed_at TIMESTAMP")
+    
+    # Alter existing settings table if necessary
+    cursor.execute("PRAGMA table_info(settings)")
+    settings_columns = {row[1] for row in cursor.fetchall()}
+    if 'broadcast_enabled' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_enabled INTEGER DEFAULT 0")
+    if 'broadcast_phone_numbers' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_phone_numbers TEXT DEFAULT ''")
+    if 'broadcast_message_template' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_message_template TEXT DEFAULT ''")
+    if 'broadcast_schedule' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_schedule TEXT DEFAULT 'manual'")
+    if 'broadcast_send_time' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_send_time TEXT DEFAULT '10:00'")
     
     # Insert default admin if not exists
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
@@ -203,6 +254,8 @@ def get_logs(page: int = 1, limit: int = 50):
     ''', (limit, offset))
     
     items = [dict(row) for row in cursor.fetchall()]
+    # Переворачиваем чтобы внутри чата старые сообщения были сверху, новые снизу
+    items.reverse()
     conn.close()
     return {'items': items, 'total': total, 'page': page, 'limit': limit}
 
@@ -216,25 +269,72 @@ def add_log(phone: str, message: str, response: str, intent: Optional[str] = Non
     conn.commit()
     conn.close()
 
-def get_broadcasts():
+def get_broadcasts(page: int = 1, limit: int = 50):
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM broadcasts")
+    total = cursor.fetchone()['count']
+    offset = (page - 1) * limit
+    
     cursor.execute('''
-        SELECT id, message, recipients_count, 
-               datetime(created_at, 'localtime') as created_at
-        FROM broadcasts ORDER BY created_at DESC
-    ''')
+        SELECT id, message, recipients_count, sent_count, failed_count, status, recipients,
+               datetime(created_at, 'localtime') as created_at,
+               datetime(completed_at, 'localtime') as completed_at
+        FROM broadcasts
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    ''', (limit, offset))
     items = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return items
+    return {'items': items, 'total': total, 'page': page, 'limit': limit}
 
-def add_broadcast(message: str, recipients_count: int):
+
+def add_broadcast(message: str, recipients_count: int, recipients_json: str = '[]', status: str = 'pending') -> int:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO broadcasts (message, recipients_count) VALUES (?, ?)",
-        (message, recipients_count)
+        "INSERT INTO broadcasts (message, recipients_count, sent_count, failed_count, status, recipients) VALUES (?, ?, 0, 0, ?, ?)",
+        (message, recipients_count, status, recipients_json)
     )
+    broadcast_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return broadcast_id
+
+
+def update_broadcast_summary(broadcast_id: int, sent_count: int, failed_count: int, status: str, completed_at: Optional[str] = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    if completed_at:
+        cursor.execute(
+            "UPDATE broadcasts SET sent_count = ?, failed_count = ?, status = ?, completed_at = ? WHERE id = ?",
+            (sent_count, failed_count, status, completed_at, broadcast_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE broadcasts SET sent_count = ?, failed_count = ?, status = ? WHERE id = ?",
+            (sent_count, failed_count, status, broadcast_id)
+        )
+    conn.commit()
+    conn.close()
+
+
+def add_broadcast_log(broadcast_id: int, phone: str, message_sid: Optional[str], status: str, error: Optional[str] = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO broadcast_logs (broadcast_id, phone, message_sid, status, error) VALUES (?, ?, ?, ?, ?)",
+        (broadcast_id, phone, message_sid, status, error)
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_broadcast(broadcast_id: int):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM broadcast_logs WHERE broadcast_id = ?", (broadcast_id,))
+    cursor.execute("DELETE FROM broadcasts WHERE id = ?", (broadcast_id,))
     conn.commit()
     conn.close()
 
@@ -298,3 +398,43 @@ def has_notification_been_sent(appointment_id: str, type: str) -> bool:
     exists = cursor.fetchone() is not None
     conn.close()
     return exists
+
+def get_broadcast_settings():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT broadcast_enabled, broadcast_phone_numbers, broadcast_message_template, broadcast_schedule, broadcast_send_time
+        FROM settings LIMIT 1
+    ''')
+    row = cursor.fetchone()
+    conn.close()
+    return {
+        'enabled': bool(row['broadcast_enabled']) if row else False,
+        'phoneNumbers': row['broadcast_phone_numbers'] if row else '',
+        'messageTemplate': row['broadcast_message_template'] if row else '',
+        'schedule': row['broadcast_schedule'] if row else 'manual',
+        'sendTime': row['broadcast_send_time'] if row else '10:00'
+    }
+
+
+def update_broadcast_settings(data: dict):
+    current = get_broadcast_settings()
+    enabled = 1 if data.get('enabled', current['enabled']) else 0
+    phone_numbers = data.get('phoneNumbers', current['phoneNumbers'])
+    message_template = data.get('messageTemplate', current['messageTemplate'])
+    schedule = data.get('schedule', current['schedule'])
+    send_time = data.get('sendTime', current['sendTime'])
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE settings SET
+            broadcast_enabled = ?,
+            broadcast_phone_numbers = ?,
+            broadcast_message_template = ?,
+            broadcast_schedule = ?,
+            broadcast_send_time = ?
+    ''', (enabled, phone_numbers, message_template, schedule, send_time))
+    conn.commit()
+    conn.close()
+    return get_broadcast_settings()

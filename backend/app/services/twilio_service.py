@@ -3,6 +3,7 @@ Twilio Service for WhatsApp and SMS integration.
 Handles incoming WhatsApp messages and outgoing notifications.
 """
 import logging
+import asyncio
 from typing import Optional
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
@@ -26,7 +27,26 @@ class TwilioService:
         else:
             self.client = None
             logger.warning("⚠️ Twilio credentials not configured")
-    
+
+    @staticmethod
+    def normalize_phone_number(phone: str) -> str:
+        """Normalize a phone number to international E.164-like format."""
+        if not phone:
+            return ""
+        phone = phone.strip()
+        if phone.startswith("whatsapp:"):
+            phone = phone[len("whatsapp:"):]
+        cleaned = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
+        if cleaned.startswith('+'):
+            return cleaned
+        if cleaned.startswith('8') and len(cleaned) == 11:
+            return f'+7{cleaned[1:]}'
+        if len(cleaned) == 10:
+            return f'+7{cleaned}'
+        if len(cleaned) >= 11 and cleaned.startswith('7'):
+            return f'+{cleaned}'
+        return cleaned
+
     def is_configured(self) -> bool:
         """Check if Twilio is properly configured"""
         return self.client is not None
@@ -50,16 +70,23 @@ class TwilioService:
             logger.error("❌ Twilio not configured")
             return {"error": "Twilio not configured"}
         
-        # Ensure WhatsApp prefix
-        if not to.startswith("whatsapp:"):
-            to = f"whatsapp:{to}"
+        normalized = self.normalize_phone_number(to)
+        if not normalized or not normalized.startswith('+'):
+            logger.error(f"❌ Invalid recipient phone number: {to}")
+            return {"error": f"Invalid recipient phone number: {to}"}
+        
+        if not normalized.startswith("whatsapp:"):
+            to = f"whatsapp:{normalized}"
+        else:
+            to = normalized
         
         logger.info(f"📤 Sending WhatsApp message")
         logger.info(f"   To: {to}")
         logger.info(f"   Message: {message[:100]}...")
         
         try:
-            msg = self.client.messages.create(
+            msg = await asyncio.to_thread(
+                self.client.messages.create,
                 from_=self.phone_number,
                 body=message,
                 to=to
@@ -106,7 +133,8 @@ class TwilioService:
         logger.info(f"   Message: {message[:100]}...")
         
         try:
-            msg = self.client.messages.create(
+            msg = await asyncio.to_thread(
+                self.client.messages.create,
                 from_=from_number,
                 body=message,
                 to=to
@@ -122,77 +150,6 @@ class TwilioService:
             logger.error(f"   ❌ Error sending SMS: {e}")
             return {"error": str(e)}
     
-    async def send_appointment_confirmation(
-        self,
-        to: str,
-        client_name: str,
-        master_name: str,
-        service_name: str,
-        datetime_str: str,
-        price: str
-    ) -> dict:
-        """
-        Send appointment confirmation via WhatsApp.
-        
-        Args:
-            to: Client phone number
-            client_name: Client name
-            master_name: Master name
-            service_name: Service name
-            datetime_str: Appointment date and time
-            price: Service price
-        
-        Returns:
-            Dict with message SID and status
-        """
-        message = f"""✅ Запись подтверждена!
-
-👤 Клиент: {client_name}
-💈 Мастер: {master_name}
-✂️ Услуга: {service_name}
-📅 Дата и время: {datetime_str}
-💰 Цена: {price} ₸
-
-📍 Адрес: Момышулы 55
-📞 Телефон: 87071272796
-
-Для отмены или переноса записи позвоните нам.
-
-Спасибо, что выбрали KHAN Barbershop! 🙏"""
-        
-        return await self.send_whatsapp_message(to, message)
-    
-    async def send_appointment_reminder(
-        self,
-        to: str,
-        client_name: str,
-        master_name: str,
-        datetime_str: str
-    ) -> dict:
-        """
-        Send appointment reminder via WhatsApp.
-        
-        Args:
-            to: Client phone number
-            client_name: Client name
-            master_name: Master name
-            datetime_str: Appointment date and time
-        
-        Returns:
-            Dict with message SID and status
-        """
-        message = f"""🔔 Напоминание о записи
-
-👤 {client_name}, напоминаем о вашей записи завтра!
-
-💈 Мастер: {master_name}
-📅 Время: {datetime_str}
-📍 Адрес: Момышулы 55
-
-До встречи в KHAN Barbershop! ✂️"""
-        
-        return await self.send_whatsapp_message(to, message)
-
     async def send_one_hour_reminder(
         self,
         to: str,

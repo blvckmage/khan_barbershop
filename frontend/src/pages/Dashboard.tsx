@@ -10,8 +10,11 @@ import {
   ListItem,
   ListItemText,
   Chip,
-  Stack,
+  LinearProgress,
 } from '@mui/material';
+import {
+  CheckCircle as CheckCircleIcon,
+} from '@mui/icons-material';
 import { api } from '../api/client';
 
 export default function Dashboard() {
@@ -22,85 +25,133 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
   }
 
   const statCards = [
-    { title: 'Записей сегодня', value: stats?.todayAppointments || 0, color: '#4caf50' },
-    { title: 'Диалогов сегодня', value: stats?.todayChats || 0, color: '#2196f3' },
-    { title: 'Всего клиентов', value: stats?.totalClients || 0, color: '#ff9800' },
-    { title: 'Рейтинг бота', value: stats?.rating || '4.9', color: '#9c27b0' },
+    {
+      title: 'Записей сегодня',
+      value: stats?.appointments_today || 0,
+      icon: <CheckCircleIcon sx={{ fontSize: 32 }} />,
+      color: '#4caf50',
+      bgcolor: 'rgba(76, 175, 80, 0.1)',
+    },
   ];
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom sx={{ fontWeight: 'bold' }}>
+      <Typography variant="h4" sx={{ fontWeight: 'bold', mb: 3 }}>
         Панель управления
       </Typography>
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3} sx={{ mb: 4, flexWrap: 'wrap' }}>
-        {statCards.map((stat) => (
-          <Card key={stat.title} sx={{ bgcolor: 'background.paper', minWidth: 200, flex: 1 }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '1fr' },
+          gap: 2,
+          mb: 4,
+        }}
+      >
+        {statCards.map((card, index) => (
+          <Card key={index} sx={{ bgcolor: card.bgcolor, border: `2px solid ${card.color}` }}>
             <CardContent>
-              <Typography color="text.secondary" variant="body2">
-                {stat.title}
-              </Typography>
-              <Typography variant="h3" sx={{ color: stat.color, fontWeight: 'bold' }}>
-                {stat.value}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <Box>
+                  <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
+                    {card.title}
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 'bold', color: card.color }}>
+                    {card.value}
+                  </Typography>
+                </Box>
+                <Box sx={{ color: card.color, opacity: 0.7 }}>
+                  {card.icon}
+                </Box>
+              </Box>
             </CardContent>
           </Card>
         ))}
-      </Stack>
+      </Box>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="h6" gutterBottom>
-            Последние записи
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
+        {/* Недавние записи */}
+        <Paper sx={{ p: 3 }}>
+          <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
+            Недавние записи
           </Typography>
-          <List>
-            {stats?.recentAppointments?.map((apt: any, i: number) => (
-              <ListItem key={i} divider>
-                <ListItemText
-                  primary={`${apt.time} - ${apt.master}`}
-                  secondary={apt.client}
-                />
-                <Chip label={apt.service} size="small" />
-              </ListItem>
-            )) || (
-              <ListItem>
-                <ListItemText primary="Нет записей за сегодня" />
-              </ListItem>
-            )}
-          </List>
+          {stats?.recent_appointments && stats.recent_appointments.length > 0 ? (
+            <List sx={{ p: 0 }}>
+              {stats.recent_appointments.slice(0, 5).map((apt: any, index: number) => (
+                <ListItem key={index} sx={{ py: 1, px: 0 }}>
+                  <ListItemText
+                    primary={apt.client_name || 'Неизвестный клиент'}
+                    secondary={
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+                        <Chip label={apt.time || 'Время не указано'} size="small" variant="outlined" />
+                        <Typography variant="caption" color="text.secondary">
+                          {apt.service || 'Услуга не указана'}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                </ListItem>
+              ))}
+            </List>
+          ) : (
+            <Typography color="text.secondary" variant="body2">
+              Записей нет
+            </Typography>
+          )}
         </Paper>
 
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="h6" gutterBottom>
-            Последние диалоги
+        {/* Статистика чатов */}
+        <Paper sx={{ p: 3 }}>
+          <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
+            Активность чатов
           </Typography>
-          <List>
-            {stats?.recentChats?.map((chat: any, i: number) => (
-              <ListItem key={i} divider>
-                <ListItemText
-                  primary={chat.phone}
-                  secondary={chat.lastMessage}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  {chat.time}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="body2">Обработано сообщений</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  {stats?.messages_processed || 0}
                 </Typography>
-              </ListItem>
-            )) || (
-              <ListItem>
-                <ListItemText primary="Нет диалогов за сегодня" />
-              </ListItem>
-            )}
-          </List>
+              </Box>
+              <LinearProgress
+                variant="determinate"
+                value={Math.min((stats?.messages_processed || 0) / (stats?.chats_today || 1), 100)}
+              />
+            </Box>
+
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="body2">Среднее время ответа</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  {stats?.avg_response_time ? `${stats.avg_response_time.toFixed(1)}s` : 'N/A'}
+                </Typography>
+              </Box>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+              <Chip
+                label={`Успешных: ${stats?.successful_chats || 0}`}
+                color="success"
+                variant="outlined"
+                size="small"
+              />
+              <Chip
+                label={`Активных: ${stats?.active_chats || 0}`}
+                color="info"
+                variant="outlined"
+                size="small"
+              />
+            </Box>
+          </Box>
         </Paper>
-      </Stack>
+      </Box>
     </Box>
   );
 }

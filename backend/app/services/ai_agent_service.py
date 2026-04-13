@@ -234,7 +234,7 @@ class AIAgentService:
             self.booking_context[session_id] = {
                 "staff_id": None, "service_id": None, "seance_length": None,
                 "datetime": None, "waiting_for_name": False,
-                "preferred_time": None, "requested_hour": None, "date": None,
+                "preferred_time": None, "requested_hour": None, "requested_minute": None, "date": None,
                 "multi_booking_count": 1, "bookings_created": 0,
                 "multi_booking_staff_ids": []  # ID мастеров для мульти-записи
             }
@@ -378,7 +378,8 @@ class AIAgentService:
                 if session_id and result and result.get("success"):
                     self._set_booking_context(session_id, staff_id=None, service_id=None,
                         seance_length=None, datetime=None, waiting_for_name=False,
-                        preferred_time=None, requested_hour=None, date=None)
+                        preferred_time=None, requested_hour=None, requested_minute=None, date=None,
+                        multi_booking_count=1, bookings_created=0)
             else:
                 result = {"error": f"Unknown tool: {name}"}
             
@@ -388,11 +389,33 @@ class AIAgentService:
             logger.error(f"   Error: {e}")
             return {"error": str(e)}
     
-    def _detect_requested_hour(self, text: str) -> Optional[int]:
-        """Detect hour from text like 'на час', 'на два', 'сағат бірге', 'сагат бырге'"""
+    def _detect_requested_time(self, text: str) -> Optional[tuple[int, int]]:
+        """Detect explicit time like 13:30, 13.30 or '13 30'."""
         import re
         text_lower = text.lower()
-        
+
+        # Explicit hh:mm or hh.mm
+        match = re.search(r'\b([01]?\d|2[0-3])\s*[:\.]\s*([0-5]\d)\b', text_lower)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+
+        # Space-separated time like '13 30' or '9 15'
+        match = re.search(r'\b([01]?\d|2[0-3])\s+([0-5]\d)\b', text_lower)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+
+        return None
+
+    def _detect_requested_hour(self, text: str) -> Optional[int]:
+        """Detect hour from text like 'на час', 'на два', 'сағат бірге', 'сагат бирге'"""
+        import re
+        text_lower = text.lower()
+
+        # If explicit minutes are present, return the exact hour part
+        explicit_time = self._detect_requested_time(text)
+        if explicit_time:
+            return explicit_time[0]
+
         # Russian time words
         time_words_ru = {
             "час": 13, "два": 14, "три": 15, "четыре": 16, "пять": 17,
@@ -482,57 +505,65 @@ class AIAgentService:
         # Check if waiting for client name OR waiting for time confirmation
         if ctx.get("waiting_for_name") and ctx.get("datetime"):
             # Проверяем - может клиент указал ВРЕМЯ а не имя?
+            requested_time = self._detect_requested_time(user_input)
+            if requested_time is not None:
+                requested_hour, requested_minute = requested_time
+                date_str = ctx["date"].split("T")[0] if "T" in ctx["date"] else ctx["date"]
+                new_datetime = f"{date_str}T{requested_hour:02d}:{requested_minute:02d}:00"
+                self._set_booking_context(full_session_id, datetime=new_datetime, requested_hour=requested_hour, requested_minute=requested_minute)
+                logger.info(f"   Client specified time {requested_hour:02d}:{requested_minute:02d}, updated datetime")
+                return f"Отлично, записываем на {requested_hour:02d}:{requested_minute:02d}! Как вас записать?"
+
             requested_hour = self._detect_requested_hour(user_input)
             if requested_hour is not None:
-                # Клиент указал время! Обновляем datetime и спрашиваем имя
                 date_str = ctx["date"].split("T")[0] if "T" in ctx["date"] else ctx["date"]
                 new_datetime = f"{date_str}T{str(requested_hour).zfill(2)}:00:00"
-                self._set_booking_context(full_session_id, datetime=new_datetime)
+                self._set_booking_context(full_session_id, datetime=new_datetime, requested_hour=requested_hour, requested_minute=None)
                 logger.info(f"   Client specified time {requested_hour}:00, updated datetime")
                 return f"Отлично, записываем на {requested_hour}:00! Как вас записать?"
+        
+        # Для мульти-записи нужны multi_booking_staff_ids, для обычной - staff_id и service_id
+        has_multi = ctx.get("multi_booking_count", 1) > 1 and ctx.get("multi_booking_staff_ids")
+        has_single = ctx.get("staff_id") and ctx.get("service_id")
+        
+        if has_multi or has_single:
+            name = user_input.strip()
+            name_match = re.search(r'(?:как|на имя)\s+(.+?)(?:\s*$|\s*\.|\s*,)', user_input, re.IGNORECASE)
+            if name_match:
+                name = name_match.group(1).strip()
             
-            # Для мульти-записи нужны multi_booking_staff_ids, для обычной - staff_id и service_id
-            has_multi = ctx.get("multi_booking_count", 1) > 1 and ctx.get("multi_booking_staff_ids")
-            has_single = ctx.get("staff_id") and ctx.get("service_id")
+            multi_count = ctx.get("multi_booking_count", 1)
+            multi_staff_ids = ctx.get("multi_booking_staff_ids", [])
+            logger.info(f"   Auto-creating {multi_count} appointment(s) for: {name}")
             
-            if has_multi or has_single:
-                name = user_input.strip()
-                name_match = re.search(r'(?:как|на имя)\s+(.+?)(?:\s*$|\s*\.|\s*,)', user_input, re.IGNORECASE)
-                if name_match:
-                    name = name_match.group(1).strip()
+            results = []
+            master_names = []
+            
+            for i in range(multi_count):
+                # Для мульти-записи берём разные staff_id из списка
+                if has_multi and i < len(multi_staff_ids):
+                    staff_id = multi_staff_ids[i]
+                else:
+                    staff_id = ctx["staff_id"]
                 
-                multi_count = ctx.get("multi_booking_count", 1)
-                multi_staff_ids = ctx.get("multi_booking_staff_ids", [])
-                logger.info(f"   Auto-creating {multi_count} appointment(s) for: {name}")
-                
-                results = []
-                master_names = []
-                
-                for i in range(multi_count):
-                    # Для мульти-записи берём разные staff_id из списка
-                    if has_multi and i < len(multi_staff_ids):
-                        staff_id = multi_staff_ids[i]
-                    else:
-                        staff_id = ctx["staff_id"]
-                    
-                    result = await alteegio_service.create_appointment(
-                        staff_id=staff_id, service_id=ctx["service_id"],
-                        client_phone=user_phone or "", client_name=name,
-                        datetime=ctx["datetime"], seance_length=ctx.get("seance_length", "3600")
-                    )
-                    results.append(result)
-                    if result and result.get("success"):
-                        master_name = result.get("data", {}).get("staff", {}).get("name", "")
-                        if master_name and master_name not in master_names:
-                            master_names.append(master_name)
-                    logger.info(f"   Appointment {i+1}/{multi_count}: staff_id={staff_id}, {'success' if result and result.get('success') else 'failed'}")
+                result = await alteegio_service.create_appointment(
+                    staff_id=staff_id, service_id=ctx["service_id"],
+                    client_phone=user_phone or "", client_name=name,
+                    datetime=ctx["datetime"], seance_length=ctx.get("seance_length", "3600")
+                )
+                results.append(result)
+                if result and result.get("success"):
+                    master_name = result.get("data", {}).get("staff", {}).get("name", "")
+                    if master_name and master_name not in master_names:
+                        master_names.append(master_name)
+                logger.info(f"   Appointment {i+1}/{multi_count}: staff_id={staff_id}, {'success' if result and result.get('success') else 'failed'}")
             
             success_count = sum(1 for r in results if r and r.get("success"))
             
             if success_count == multi_count:
                 self._set_booking_context(full_session_id, staff_id=None, service_id=None,
                     seance_length=None, datetime=None, waiting_for_name=False,
-                    preferred_time=None, requested_hour=None, date=None,
+                    preferred_time=None, requested_hour=None, requested_minute=None, date=None,
                     multi_booking_count=1, bookings_created=0)
                 master_name = results[0].get("data", {}).get("staff", {}).get("name", "мастер")
                 time_raw = results[0].get("data", {}).get("date", "")
@@ -543,7 +574,7 @@ class AIAgentService:
             elif success_count > 0:
                 self._set_booking_context(full_session_id, staff_id=None, service_id=None,
                     seance_length=None, datetime=None, waiting_for_name=False,
-                    preferred_time=None, requested_hour=None, date=None,
+                    preferred_time=None, requested_hour=None, requested_minute=None, date=None,
                     multi_booking_count=1, bookings_created=0)
                 return f"Записал {success_count} из {multi_count}. Остальные не удалось создать."
             else:
@@ -573,7 +604,7 @@ class AIAgentService:
         # ВАЖНО: "ы" не меняется при нормализации, поэтому добавляем варианты с "ы" и "и"
         multi_booking_patterns = [
             "двое дет", "два ребен", "двух дет", "двоих дет",
-            # Казахский: екі (2) -> нормализовано в "еки" или "екы" в зависимости от буквы
+            # Казахский: екі (2) -> нормализовано в "eki" или "екы" в зависимости от буквы
             "еки бала", "еки балани", "еки балага", "еки балалар",
             "екы бала", "екы баланы", "екы балага", "екы балалар",  # С казахской "ы"
             "еки балан", "еки баланн",  # Дополнительные варианты
@@ -609,21 +640,31 @@ class AIAgentService:
         elif any(w in user_lower for w in ["вечер", "вечером"]):
             self._set_booking_context(full_session_id, preferred_time="evening")
         
-        # Detect specific hour
-        requested_hour = self._detect_requested_hour(user_input)
-        if requested_hour is not None:
-            self._set_booking_context(full_session_id, requested_hour=requested_hour)
-            logger.info(f"   Detected hour: {requested_hour}")
-        
+        # Detect specific hour or exact time
+        requested_time = self._detect_requested_time(user_input)
+        requested_hour = None
+        requested_minute = None
+        if requested_time is not None:
+            requested_hour, requested_minute = requested_time
+            self._set_booking_context(full_session_id, requested_hour=requested_hour, requested_minute=requested_minute)
+            logger.info(f"   Detected exact time: {requested_hour:02d}:{requested_minute:02d}")
+        else:
+            requested_hour = self._detect_requested_hour(user_input)
+            if requested_hour is not None:
+                self._set_booking_context(full_session_id, requested_hour=requested_hour, requested_minute=None)
+                logger.info(f"   Detected hour: {requested_hour}")
+
         # АВТО-ЗАПИСЬ: Если в контексте есть staff_id, service_id, date и клиент указал время
-        # Пропускаем AI и сразу формируем datetime для записи
-        if ctx.get("staff_id") and ctx.get("service_id") and ctx.get("date") and requested_hour:
+        if ctx.get("staff_id") and ctx.get("service_id") and ctx.get("date") and requested_hour is not None:
             date_str = ctx["date"].split("T")[0] if "T" in ctx["date"] else ctx["date"]
-            datetime_str = f"{date_str}T{str(requested_hour).zfill(2)}:00:00"
+            minute = requested_minute if requested_minute is not None else 0
+            datetime_str = f"{date_str}T{str(requested_hour).zfill(2)}:{str(minute).zfill(2)}:00"
             self._set_booking_context(full_session_id, datetime=datetime_str, waiting_for_name=True)
             logger.info(f"   ✅ Auto-set datetime={datetime_str}, asking for name")
+            if requested_minute is not None:
+                return f"Отлично, записываем на {requested_hour:02d}:{requested_minute:02d}! Как вас записать?"
             return f"Отлично, записываем на {requested_hour}:00! Как вас записать?"
-        
+
         # Build user message with context
         user_message = f"User Input: {user_input}"
         if user_phone:
@@ -642,13 +683,18 @@ class AIAgentService:
                     staff_name = "Миша"
                     break
             context_hints.append(f"ВНИМАНИЕ: Клиент УЖЕ выбрал мастера (staff_id={ctx['staff_id']}) и услугу! Просто запиши его на указанное время, НЕ предлагай других мастеров и НЕ вызывай get_available_masters!")
+        elif ctx.get("waiting_for_name") and ctx.get("datetime"):
+            context_hints.append(f"Клиент ждет подтверждения записи на {format_datetime_human(ctx['datetime'])}. Спросите, как его записать.")
         
         if ctx.get("preferred_time"):
             hints = {"lunch": "Клиент хочет на обед (12:00-14:00)!", "morning": "Клиент хочет утром (09:00-12:00)!", "evening": "Клиент хочет вечером (17:00-20:00)!"}
             context_hints.append(hints.get(ctx['preferred_time'], ''))
         
         if ctx.get("requested_hour"):
-            context_hints.append(f"Клиент уже указал время: {ctx['requested_hour']}:00! Ищи мастеров на это время!")
+            if ctx.get("requested_minute") is not None:
+                context_hints.append(f"Клиент уже указал время: {ctx['requested_hour']:02d}:{ctx['requested_minute']:02d}! Ищи мастеров на это время!")
+            else:
+                context_hints.append(f"Клиент уже указал время: {ctx['requested_hour']}:00! Ищи мастеров на это время!")
         
         if context_hints:
             user_message += f"\n\nПРИМЕЧАНИЕ: {' '.join(context_hints)}"
