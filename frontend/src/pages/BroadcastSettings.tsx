@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Paper,
@@ -8,6 +8,8 @@ import {
   Card,
   Switch,
   Divider,
+  Autocomplete,
+  Chip,
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -23,6 +25,11 @@ interface BroadcastConfig {
   sendTime: string;
 }
 
+interface BroadcastClient {
+  phone: string;
+  name: string;
+}
+
 export default function BroadcastSettings() {
   const [config, setConfig] = useState<BroadcastConfig>({
     enabled: false,
@@ -31,11 +38,23 @@ export default function BroadcastSettings() {
     schedule: 'manual',
     sendTime: '10:00',
   });
-
+  const [clients, setClients] = useState<BroadcastClient[]>([]);
+  const [selectedClients, setSelectedClients] = useState<BroadcastClient[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [clientsError, setClientsError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<string | null>(null);
+
+  const recipientPhones = useMemo(() => {
+    const manualPhones = config.phoneNumbers
+      .split('\n')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const clientPhones = selectedClients.map((client) => client.phone);
+    return Array.from(new Set([...clientPhones, ...manualPhones]));
+  }, [config.phoneNumbers, selectedClients]);
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -56,8 +75,22 @@ export default function BroadcastSettings() {
     loadConfig();
   }, []);
 
+  const loadClients = async () => {
+    setClientsLoading(true);
+    setClientsError(null);
+    try {
+      const data = await api.getBroadcastClients(30);
+      setClients(data.items || []);
+    } catch (error) {
+      console.error('Failed to load broadcast clients:', error);
+      setClientsError('Не удалось загрузить клиентов из Alteegio');
+    } finally {
+      setClientsLoading(false);
+    }
+  };
+
   const handleChange = (field: keyof BroadcastConfig, value: any) => {
-    setConfig(prev => ({
+    setConfig((prev) => ({
       ...prev,
       [field]: value,
     }));
@@ -79,10 +112,7 @@ export default function BroadcastSettings() {
   };
 
   const handleSendNow = async () => {
-    const recipients = config.phoneNumbers
-      .split('\n')
-      .map((p) => p.trim())
-      .filter(Boolean);
+    const recipients = recipientPhones;
 
     if (!recipients.length) {
       alert('Добавьте хотя бы один телефон для рассылки.');
@@ -104,8 +134,8 @@ export default function BroadcastSettings() {
       setSendResult(`Рассылка отправлена: ${result.sentCount} из ${result.recipientCount} сообщений.`);
     } catch (error) {
       console.error('Failed to send broadcast:', error);
-      setSendResult('Ошибка при отправке рассылки.');
-      alert('Не удалось отправить рассылку. Проверьте конфигурацию Twilio и журналы.');
+      setSendResult('Ошибка при отправке рассылки. Проверьте конфигурацию Twilio и журнал.');
+      alert('Не удалось отправить рассылку. Проверьте конфигурацию Twilio и журнал.');
     } finally {
       setSending(false);
     }
@@ -122,7 +152,7 @@ export default function BroadcastSettings() {
 
       <Paper sx={{ mb: 3, p: 2, bgcolor: 'info.dark' }}>
         <Typography variant="body2" color="info.main">
-          Здесь вы можете настроить параметры автоматической рассылки сообщений клиентам (функция в разработке)
+          Здесь вы можете загрузить клиентов из базы Alteegio, выбрать получателей и сохранить шаблон рассылки.
         </Typography>
       </Paper>
 
@@ -135,21 +165,19 @@ export default function BroadcastSettings() {
       )}
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 1fr' }, gap: 3 }}>
-        {/* Основные настройки */}
         <Paper sx={{ p: 3 }}>
           <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
             Основные параметры
           </Typography>
 
-          {/* Включение/отключение */}
           <Card sx={{ mb: 2, p: 2, bgcolor: 'action.hover' }}>
             <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-              <Switch 
+              <Switch
                 checked={config.enabled}
                 slotProps={{
-                  input: { 
-                    onChange: (e) => handleChange('enabled', (e.target as HTMLInputElement).checked)
-                  }
+                  input: {
+                    onChange: (e) => handleChange('enabled', (e.target as HTMLInputElement).checked),
+                  },
                 }}
               />
               <Box>
@@ -157,7 +185,7 @@ export default function BroadcastSettings() {
                   Включить рассылку
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Активирует автоматическую отправку сообщений
+                  Активирует автоматическую отправку по выбранным параметрам
                 </Typography>
               </Box>
             </Box>
@@ -165,7 +193,62 @@ export default function BroadcastSettings() {
 
           <Divider sx={{ my: 2 }} />
 
-          {/* Номера для рассылки */}
+          <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
+            Клиенты из Alteegio
+          </Typography>
+          <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              onClick={loadClients}
+              disabled={clientsLoading}
+            >
+              {clientsLoading ? 'Загрузка...' : 'Загрузить клиентов'}
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => setSelectedClients(clients)}
+              disabled={!clients.length}
+            >
+              Выбрать всех
+            </Button>
+          </Box>
+          {clientsError && (
+            <Typography color="error" variant="body2" sx={{ mb: 2 }}>
+              {clientsError}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            Выбрано получателей: {recipientPhones.length}. Дубли автоматически удалены.
+          </Typography>
+          <Autocomplete
+            multiple
+            options={clients}
+            getOptionLabel={(option) => `${option.name} ${option.phone}`}
+            value={selectedClients}
+            onChange={(_, value) => setSelectedClients(value)}
+            disableCloseOnSelect
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Выберите получателей"
+                placeholder="Найти клиента"
+                sx={{ mb: 2 }}
+              />
+            )}
+            renderOption={(props, option, { selected }) => (
+              <li {...props}>
+                <Chip
+                  label={`${option.name} ${option.phone}`}
+                  variant={selected ? 'filled' : 'outlined'}
+                  color={selected ? 'primary' : 'default'}
+                  sx={{ mr: 1 }}
+                />
+              </li>
+            )}
+          />
+
+          <Divider sx={{ my: 2 }} />
+
           <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
             Номера телефонов для рассылки
           </Typography>
