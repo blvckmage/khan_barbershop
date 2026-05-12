@@ -12,7 +12,7 @@ from ..database import (
     update_broadcast_settings
 )
 from ..services.alteegio_service import alteegio_service
-from ..services.twilio_service import twilio_service
+from ..services.whatsapp_service import whatsapp_service
 
 # Путь к файлу логов (относительно директории backend, откуда запускается uvicorn)
 LOG_FILE = os.path.join("logs", "app.log")
@@ -30,6 +30,7 @@ class LoginRequest(BaseModel):
 class BroadcastCreate(BaseModel):
     message: str
     recipients: list[str]
+    scheduled_at: Optional[str] = None
 
 class MasterUpdate(BaseModel):
     is_active: bool
@@ -243,12 +244,12 @@ async def list_broadcasts(page: int = 1, limit: int = 50, token: str = Depends(v
 @router.post("/broadcasts")
 async def create_broadcast(data: BroadcastCreate, token: str = Depends(verify_token)):
     """
-    Создает рассылку и отправляет сообщения получателям через Twilio.
+    Создает рассылку и отправляет сообщения получателям через WhatsApp Cloud API.
     """
     normalized_recipients = []
     invalid_recipients = []
     for phone in data.recipients:
-        normalized = twilio_service.normalize_phone_number(phone)
+        normalized = whatsapp_service.normalize_phone_number(phone)
         if normalized and normalized.startswith('+') and len([d for d in normalized if d.isdigit()]) >= 10:
             normalized_recipients.append(normalized)
         else:
@@ -262,8 +263,19 @@ async def create_broadcast(data: BroadcastCreate, token: str = Depends(verify_to
         data.message,
         len(recipients),
         recipients_json=json.dumps(recipients),
-        status='sending'
+        status='scheduled' if data.scheduled_at else 'sending',
+        scheduled_at=data.scheduled_at
     )
+
+    if data.scheduled_at:
+        return {
+            "success": True,
+            "broadcastId": broadcast_id,
+            "recipientCount": len(recipients),
+            "status": "scheduled",
+            "invalidRecipients": invalid_recipients,
+            "errors": []
+        }
 
     sent_count = 0
     failed_count = 0
@@ -274,15 +286,15 @@ async def create_broadcast(data: BroadcastCreate, token: str = Depends(verify_to
             add_broadcast_log(broadcast_id, invalid, None, 'failed', 'Invalid phone format')
             errors.append({"phone": invalid, "error": "Invalid phone format"})
 
-    if not twilio_service.is_configured():
+    if not whatsapp_service.is_configured():
         update_broadcast_summary(broadcast_id, 0, len(recipients), 'failed', datetime.now().isoformat())
         for phone in recipients:
-            add_broadcast_log(broadcast_id, phone, None, 'failed', 'Twilio is not configured')
-        raise HTTPException(status_code=500, detail="Twilio is not configured. Broadcast was recorded but not sent.")
+            add_broadcast_log(broadcast_id, phone, None, 'failed', 'WhatsApp Cloud API is not configured')
+        raise HTTPException(status_code=500, detail="WhatsApp Cloud API is not configured. Broadcast was recorded but not sent.")
 
     for recipient in recipients:
         try:
-            result = await twilio_service.send_whatsapp_message(recipient, data.message)
+            result = await whatsapp_service.send_whatsapp_message(recipient, data.message)
             if 'error' in result:
                 failed_count += 1
                 errors.append({"phone": recipient, "error": result.get('error')})

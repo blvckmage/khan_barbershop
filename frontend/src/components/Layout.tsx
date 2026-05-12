@@ -80,8 +80,9 @@ export default function Layout() {
         sx={{
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           ml: { sm: `${drawerWidth}px` },
-          bgcolor: 'background.paper',
-          color: 'text.primary',
+          background: 'linear-gradient(135deg, #4fc3f7 0%, #0288d1 100%)',
+          color: '#ffffff',
+          boxShadow: '0 4px 20px rgba(2, 136, 209, 0.2)',
         }}
       >
         <Toolbar>

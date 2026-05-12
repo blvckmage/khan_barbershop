@@ -526,7 +526,9 @@ class AIAgentService:
         has_multi = ctx.get("multi_booking_count", 1) > 1 and ctx.get("multi_booking_staff_ids")
         has_single = ctx.get("staff_id") and ctx.get("service_id")
         
-        if has_multi or has_single:
+        # ВАЖНО: авто-создание записи ТОЛЬКО когда бот уже спросил имя (waiting_for_name=True)
+        # Иначе "Давай в три" воспринималось как имя клиента!
+        if ctx.get("waiting_for_name") and (has_multi or has_single):
             name = user_input.strip()
             name_match = re.search(r'(?:как|на имя)\s+(.+?)(?:\s*$|\s*\.|\s*,)', user_input, re.IGNORECASE)
             if name_match:

@@ -36,8 +36,8 @@ export default function Dashboard() {
       title: 'Записей сегодня',
       value: stats?.appointments_today || 0,
       icon: <CheckCircleIcon sx={{ fontSize: 32 }} />,
-      color: '#4caf50',
-      bgcolor: 'rgba(76, 175, 80, 0.1)',
+      color: '#0288d1',
+      bgcolor: 'rgba(2, 136, 209, 0.08)',
     },
   ];
 

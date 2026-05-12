@@ -17,11 +17,13 @@ class Settings(BaseSettings):
     staff_spreadsheet_id: str
     services_spreadsheet_id: str
     
-    # Twilio
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_phone_number: str = ""
-    
+    # WhatsApp Business Cloud API
+    whatsapp_api_url: str = "https://graph.facebook.com"
+    whatsapp_api_version: str = "v17.0"
+    whatsapp_phone_number_id: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_verify_token: str = ""
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     
@@ -29,7 +31,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     debug: bool = True
-    
+
     @property
     def alteegio_auth_header(self) -> str:
         return f"Bearer {self.alteegio_bearer_token}, User {self.alteegio_user_token}"

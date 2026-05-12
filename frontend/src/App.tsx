@@ -19,18 +19,42 @@ const queryClient = new QueryClient({
   },
 });
 
-const darkTheme = createTheme({
+const lightTheme = createTheme({
   palette: {
-    mode: 'dark',
+    mode: 'light',
     primary: {
-      main: '#90caf9',
+      main: '#0288d1',
+      light: '#4fc3f7',
+      dark: '#01579b',
     },
     secondary: {
-      main: '#f48fb1',
+      main: '#00bcd4',
+      light: '#80deea',
+      dark: '#00838f',
     },
     background: {
-      default: '#121212',
-      paper: '#1e1e1e',
+      default: '#f0f8ff',
+      paper: '#ffffff',
+    },
+  },
+  shape: {
+    borderRadius: 12,
+  },
+  components: {
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 600,
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0px 4px 20px rgba(0, 191, 255, 0.08)',
+        },
+      },
     },
   },
 });
@@ -43,7 +67,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={darkTheme}>
+      <ThemeProvider theme={lightTheme}>
         <CssBaseline />
         <BrowserRouter>
           <Routes>

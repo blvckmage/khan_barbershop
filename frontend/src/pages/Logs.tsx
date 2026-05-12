@@ -87,6 +87,27 @@ export default function Logs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, backendPage]);
 
+  useEffect(() => {
+    let ws: WebSocket;
+    if (tab === 0) {
+      const wsUrl = import.meta.env.VITE_API_URL.replace('http', 'ws') + '/api/ws/logs';
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'NEW_CHAT') {
+            setChatLogs((prev) => [data.data, ...prev]);
+          }
+        } catch (e) {
+          console.error('WS Error:', e);
+        }
+      };
+    }
+    return () => {
+      if (ws) ws.close();
+    };
+  }, [tab]);
+
   const handleViewLog = (log: ChatLog) => {
     setSelectedLog(log);
     setOpenDialog(true);
@@ -227,7 +248,7 @@ export default function Logs() {
                           variant="outlined"
                           sx={{ mb: 1 }}
                         />
-                        <Paper sx={{ p: 2, mb: 1, bgcolor: 'action.hover' }}>
+                        <Paper sx={{ p: 2, mb: 1, bgcolor: 'rgba(2, 136, 209, 0.05)' }}>
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                             Сообщение клиента:
                           </Typography>
@@ -351,14 +372,14 @@ export default function Logs() {
               <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
                 Сообщение клиента:
               </Typography>
-              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'rgba(2, 136, 209, 0.05)', borderRadius: 1 }}>
                 {selectedLog.message}
               </Typography>
 
               <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
                 Ответ бота:
               </Typography>
-              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'rgba(2, 136, 209, 0.05)', borderRadius: 1 }}>
                 {selectedLog.response}
               </Typography>
 

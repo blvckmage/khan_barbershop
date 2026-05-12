@@ -13,7 +13,7 @@ from typing import List, Dict, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.config import get_settings
-from app.services.twilio_service import twilio_service
+from app.services.whatsapp_service import whatsapp_service
 from app.services.alteegio_service import alteegio_service
 from app.database import add_notification_log, has_notification_been_sent
 
@@ -55,6 +55,22 @@ class BroadcastService:
             hour=12,
             minute=0,
             id='check_revisit_reminders',
+            replace_existing=True
+        )
+        
+        # Check for completed appointments for NPS every 30 minutes
+        self.scheduler.add_job(
+            self.check_nps_collection,
+            trigger=IntervalTrigger(minutes=30),
+            id='check_nps_collection',
+            replace_existing=True
+        )
+
+        # Check for scheduled broadcasts every 1 minute
+        self.scheduler.add_job(
+            self.check_scheduled_broadcasts,
+            trigger=IntervalTrigger(minutes=1),
+            id='check_scheduled_broadcasts',
             replace_existing=True
         )
         
@@ -104,7 +120,7 @@ class BroadcastService:
                         continue
                         
                     # Send reminder
-                    result = await twilio_service.send_one_hour_reminder(
+                    result = await whatsapp_service.send_one_hour_reminder(
                         to=client_phone,
                         client_name=client_name,
                         master_name=master_name,
@@ -130,7 +146,7 @@ class BroadcastService:
                             error=result.get('error')
                         )
                         
-                    # Add delay to respect Twilio rate limits
+                    # Add delay to respect API rate limits
                     await asyncio.sleep(1.5)
                     
                 except Exception as e:
@@ -185,7 +201,7 @@ class BroadcastService:
                         continue
                         
                     # Send revisit reminder
-                    result = await twilio_service.send_revisit_reminder(
+                    result = await whatsapp_service.send_revisit_reminder(
                         to=client_phone,
                         client_name=client_name,
                         last_visit_date=visit_date
@@ -210,7 +226,7 @@ class BroadcastService:
                             error=result.get('error')
                         )
                         
-                    # Add delay to respect Twilio rate limits
+                    # Add delay to respect API rate limits
                     await asyncio.sleep(1.5)
                     
                 except Exception as e:
@@ -221,6 +237,100 @@ class BroadcastService:
             
         except Exception as e:
             logger.error(f"❌ Error in check_revisit_reminders: {e}", exc_info=True)
+
+    async def check_nps_collection(self):
+        """Check appointments that finished ~2 hours ago and send NPS"""
+        logger.info("🔍 Checking for NPS collection (2 hours after appointment)")
+        
+        try:
+            now = datetime.now(ALMATY_TZ)
+            target_time = now - timedelta(hours=2)
+            
+            appointments = await alteegio_service.get_appointments_for_period(
+                start_time=target_time - timedelta(hours=2),
+                end_time=target_time
+            )
+            
+            if not appointments:
+                return
+                
+            for appointment in appointments:
+                try:
+                    appointment_id = appointment.get('id')
+                    client_phone = appointment.get('client_phone')
+                    client_name = appointment.get('client_name', 'Клиент')
+                    master_name = appointment.get('master_name', 'Мастер')
+                    
+                    if await has_notification_been_sent(appointment_id, 'nps_request'):
+                        continue
+                        
+                    result = await whatsapp_service.send_nps_request(
+                        to=client_phone,
+                        client_name=client_name,
+                        master_name=master_name
+                    )
+                    
+                    if 'error' not in result:
+                        await add_notification_log(
+                            appointment_id=appointment_id,
+                            phone=client_phone,
+                            type='nps_request',
+                            message_sid=result.get('sid'),
+                            status='sent'
+                        )
+                    else:
+                        await add_notification_log(
+                            appointment_id=appointment_id,
+                            phone=client_phone,
+                            type='nps_request',
+                            status='failed',
+                            error=result.get('error')
+                        )
+                    await asyncio.sleep(1.5)
+                except Exception as e:
+                    logger.error(f"❌ Error processing NPS: {e}")
+                    continue
+        except Exception as e:
+            logger.error(f"❌ Error in check_nps_collection: {e}")
+
+    async def check_scheduled_broadcasts(self):
+        """Check and execute scheduled broadcasts"""
+        from app.database import get_due_scheduled_broadcasts, update_broadcast_summary, add_broadcast_log
+        import json
+        
+        logger.info("🔍 Checking for due scheduled broadcasts")
+        now_str = datetime.now(ALMATY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+        
+        try:
+            broadcasts = get_due_scheduled_broadcasts(now_str)
+            for b in broadcasts:
+                broadcast_id = b['id']
+                message = b['message']
+                recipients = json.loads(b['recipients'] or '[]')
+                
+                sent_count = 0
+                failed_count = 0
+                
+                for recipient in recipients:
+                    try:
+                        result = await whatsapp_service.send_whatsapp_message(recipient, message)
+                        if 'error' in result:
+                            failed_count += 1
+                            add_broadcast_log(broadcast_id, recipient, None, 'failed', result.get('error'))
+                        else:
+                            sent_count += 1
+                            add_broadcast_log(broadcast_id, recipient, result.get('sid'), 'sent')
+                    except Exception as e:
+                        failed_count += 1
+                        add_broadcast_log(broadcast_id, recipient, None, 'failed', str(e))
+                    finally:
+                        await asyncio.sleep(1)
+                
+                status = 'completed' if sent_count > 0 and failed_count == 0 else 'failed' if sent_count == 0 else 'completed'
+                update_broadcast_summary(broadcast_id, sent_count, failed_count, status, datetime.now(ALMATY_TZ).isoformat())
+                
+        except Exception as e:
+            logger.error(f"❌ Error in check_scheduled_broadcasts: {e}")
 
 
 # Singleton instance

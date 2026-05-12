@@ -47,10 +47,20 @@ export default function Login() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: 'background.default',
+        background: 'linear-gradient(135deg, #e0f7fa 0%, #81d4fa 100%)',
       }}
     >
-      <Card sx={{ maxWidth: 400, width: '100%', mx: 2 }}>
+      <Card 
+        sx={{ 
+          maxWidth: 400, 
+          width: '100%', 
+          mx: 2, 
+          backgroundColor: 'rgba(255, 255, 255, 0.85)',
+          backdropFilter: 'blur(10px)',
+          boxShadow: '0 8px 32px rgba(2, 136, 209, 0.2)',
+          border: '1px solid rgba(255, 255, 255, 0.3)'
+        }}
+      >
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h4" align="center" gutterBottom sx={{ fontWeight: 'bold' }}>
             KHAN Admin

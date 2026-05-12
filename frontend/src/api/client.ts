@@ -119,7 +119,7 @@ export const api = {
     const response = await apiClient.get(`/broadcasts?page=${page}&limit=${limit}`);
     return response.data;
   },
-  createBroadcast: async (data: { message: string; recipients: string[] }) => {
+  createBroadcast: async (data: { message: string; recipients: string[]; scheduled_at?: string }) => {
     const response = await apiClient.post('/broadcasts', data);
     return response.data;
   },

@@ -76,7 +76,8 @@ def init_db():
             status TEXT DEFAULT 'pending',
             recipients TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP
+            completed_at TIMESTAMP,
+            scheduled_at TIMESTAMP
         )
     ''')
     
@@ -135,6 +136,8 @@ def init_db():
         cursor.execute("ALTER TABLE broadcasts ADD COLUMN recipients TEXT")
     if 'completed_at' not in existing_columns:
         cursor.execute("ALTER TABLE broadcasts ADD COLUMN completed_at TIMESTAMP")
+    if 'scheduled_at' not in existing_columns:
+        cursor.execute("ALTER TABLE broadcasts ADD COLUMN scheduled_at TIMESTAMP")
     
     # Alter existing settings table if necessary
     cursor.execute("PRAGMA table_info(settings)")
@@ -279,7 +282,8 @@ def get_broadcasts(page: int = 1, limit: int = 50):
     cursor.execute('''
         SELECT id, message, recipients_count, sent_count, failed_count, status, recipients,
                datetime(created_at, 'localtime') as created_at,
-               datetime(completed_at, 'localtime') as completed_at
+               datetime(completed_at, 'localtime') as completed_at,
+               datetime(scheduled_at, 'localtime') as scheduled_at
         FROM broadcasts
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
@@ -289,17 +293,30 @@ def get_broadcasts(page: int = 1, limit: int = 50):
     return {'items': items, 'total': total, 'page': page, 'limit': limit}
 
 
-def add_broadcast(message: str, recipients_count: int, recipients_json: str = '[]', status: str = 'pending') -> int:
+def add_broadcast(message: str, recipients_count: int, recipients_json: str = '[]', status: str = 'pending', scheduled_at: Optional[str] = None) -> int:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO broadcasts (message, recipients_count, sent_count, failed_count, status, recipients) VALUES (?, ?, 0, 0, ?, ?)",
-        (message, recipients_count, status, recipients_json)
+        "INSERT INTO broadcasts (message, recipients_count, sent_count, failed_count, status, recipients, scheduled_at) VALUES (?, ?, 0, 0, ?, ?, ?)",
+        (message, recipients_count, status, recipients_json, scheduled_at)
     )
     broadcast_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return broadcast_id
+
+
+def get_due_scheduled_broadcasts(current_time_str: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, message, recipients_count, recipients
+        FROM broadcasts
+        WHERE status = 'scheduled' AND scheduled_at <= ?
+    ''', (current_time_str,))
+    items = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return items
 
 
 def update_broadcast_summary(broadcast_id: int, sent_count: int, failed_count: int, status: str, completed_at: Optional[str] = None):

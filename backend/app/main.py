@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import webhook, admin
+from app.routers import webhook, admin, websocket
 
 # Создаём директорию для логов
 LOG_DIR = "logs"
@@ -32,6 +32,8 @@ console_handler.setLevel(logging.INFO)
 # Настройка КОРНЕВОГО логгера - перехватывает ВСЕ логи
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
+root_logger.handlers = []
+root_logger.propagate = False
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
@@ -94,6 +96,7 @@ app.add_middleware(
 # Include routers
 app.include_router(webhook.router)
 app.include_router(admin.router)
+app.include_router(websocket.router, prefix="/api")
 
 
 @app.get("/")
@@ -104,10 +107,9 @@ async def root():
 
 @app.post("/")
 async def root_post(request: Request):
-    """Handle misplaced POST requests - redirect to Twilio webhook"""
-    logger.warning("⚠️ POST request received at root. Redirecting to /webhook/twilio/whatsapp")
-    # Redirect to proper webhook
-    return await webhook.twilio_whatsapp_webhook(request)
+    """Handle misplaced POST requests - redirect to WhatsApp Cloud API webhook"""
+    logger.warning("⚠️ POST request received at root. Redirecting to /webhook/whatsapp")
+    return await webhook.whatsapp_webhook(request)
 
 
 @app.get("/health")
