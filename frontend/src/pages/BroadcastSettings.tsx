@@ -107,17 +107,58 @@ export default function BroadcastSettings() {
   const [submittingTmpl, setSubmittingTmpl] = useState(false);
   const [tmplResult, setTmplResult] = useState<{ warning?: string; error?: string; name?: string; status?: string } | null>(null);
 
+  // Quick Reply buttons for new template
+  const [btnInput, setBtnInput] = useState('');
+  const [tmplButtons, setTmplButtons] = useState<{ text: string }[]>([]);
+
+  const addButton = () => {
+    const text = btnInput.trim();
+    if (!text || text.length > 25) return;
+    if (tmplButtons.length >= 10) return;
+    setTmplButtons([...tmplButtons, { text }]);
+    setBtnInput('');
+  };
+
+  const removeButton = (i: number) => {
+    setTmplButtons(tmplButtons.filter((_, idx) => idx !== i));
+  };
+
+  // Reminder enable/disable
+  const { data: reminderSettings } = useQuery({
+    queryKey: ['reminder-settings'],
+    queryFn: api.getReminderSettings,
+    enabled: tab === 'templates',
+  });
+  const [savingReminders, setSavingReminders] = useState(false);
+
+  const toggleReminder = async (key: 'enable_one_hour_reminder' | 'enable_revisit_reminder' | 'enable_nps_request') => {
+    if (!reminderSettings) return;
+    setSavingReminders(true);
+    try {
+      const next = { ...reminderSettings, [key]: !reminderSettings[key] };
+      await api.updateReminderSettings(next);
+      qc.invalidateQueries({ queryKey: ['reminder-settings'] });
+    } finally {
+      setSavingReminders(false);
+    }
+  };
+
   const submitTemplate = async () => {
     if (!tmplText.trim()) return;
     setSubmittingTmpl(true);
     setTmplResult(null);
     try {
-      const res = await api.createWabaTemplate({ body_text: tmplText, category: tmplCategory });
+      const payload: any = { body_text: tmplText, category: tmplCategory };
+      if (tmplButtons.length > 0) {
+        payload.buttons = tmplButtons.map(b => ({ type: 'QUICK_REPLY', text: b.text }));
+      }
+      const res = await api.createWabaTemplate(payload);
       if (res.meta_error || res.warning) {
         setTmplResult({ warning: res.warning, name: res.template?.name });
       } else {
         setTmplResult({ name: res.template?.name, status: res.template?.meta_status });
         setTmplText('');
+        setTmplButtons([]);
       }
       qc.invalidateQueries({ queryKey: ['waba-templates'] });
     } catch (e: any) {
@@ -209,6 +250,57 @@ export default function BroadcastSettings() {
 
       {tab === 'templates' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Reminder toggles */}
+          <Card>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0', marginBottom: 6 }}>
+              🔔 Автоматические напоминания
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginBottom: 16 }}>
+              Каждое напоминание можно отдельно включать и выключать. Выключенные напоминания пропускаются APScheduler-ом сразу же при следующем запуске задачи.
+            </div>
+            {!reminderSettings ? (
+              <div style={{ color: MUTED, fontSize: 13 }}>Загрузка настроек...</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[
+                  { key: 'enable_one_hour_reminder' as const, title: '⏳ За час до приёма', sub: 'Отправляется за 60 минут до записи (каждые 5 мин)' },
+                  { key: 'enable_revisit_reminder' as const, title: '💈 Пора подстричься', sub: 'Через 20 дней после последнего визита (ежедневно в 12:00)' },
+                  { key: 'enable_nps_request' as const, title: '⭐ NPS оценка визита', sub: 'Через ~2 часа после стрижки (каждые 30 мин)' },
+                ].map(item => {
+                  const enabled = reminderSettings[item.key];
+                  return (
+                    <div key={item.key} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '14px 18px', borderRadius: 10, background: SURFACE2,
+                      border: `1px solid ${enabled ? 'rgba(39,174,96,0.2)' : 'transparent'}`,
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: '#F0F0F0' }}>{item.title}</div>
+                        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{item.sub}</div>
+                      </div>
+                      <button
+                        onClick={() => toggleReminder(item.key)}
+                        disabled={savingReminders}
+                        style={{
+                          width: 52, height: 28, borderRadius: 14, border: 'none',
+                          cursor: savingReminders ? 'wait' : 'pointer',
+                          background: enabled ? '#27AE60' : '#444',
+                          position: 'relative', transition: 'background 0.2s', flexShrink: 0,
+                        }}
+                      >
+                        <div style={{
+                          position: 'absolute', top: 3, left: enabled ? 27 : 3,
+                          width: 22, height: 22, borderRadius: '50%', background: '#fff',
+                          transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                        }} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+
           {/* Info banner */}
           <div style={{
             padding: '14px 18px', borderRadius: 10,
@@ -250,6 +342,56 @@ export default function BroadcastSettings() {
               />
               <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
                 💡 Используйте {'{{1}}'}, {'{{2}}'} и т.д. для переменных (имя клиента, дата и т.п.)
+              </div>
+            </div>
+
+            {/* Quick Reply buttons (optional) */}
+            <div style={{ marginBottom: 12 }}>
+              <Label>Кнопки быстрого ответа (опционально, до 10)</Label>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input
+                  value={btnInput}
+                  onChange={e => setBtnInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addButton())}
+                  maxLength={25}
+                  placeholder='Текст кнопки (например "Записаться" или "5")'
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+                    background: SURFACE2, border: `1px solid ${BORDER}`, color: '#F0F0F0', outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={addButton}
+                  disabled={!btnInput.trim() || tmplButtons.length >= 10}
+                  style={{
+                    padding: '8px 16px', borderRadius: 8, border: `1px solid ${BORDER}`,
+                    background: SURFACE2, color: '#F0F0F0',
+                    cursor: !btnInput.trim() || tmplButtons.length >= 10 ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                  }}
+                >+ Добавить</button>
+              </div>
+              {tmplButtons.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {tmplButtons.map((b, i) => (
+                    <span key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      background: 'rgba(201,168,76,0.12)', color: GOLD,
+                      border: `1px solid ${GOLD}30`,
+                    }}>
+                      {b.text}
+                      <button onClick={() => removeButton(i)} style={{
+                        background: 'none', border: 'none', color: '#E74C3C',
+                        cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1,
+                      }}>✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+                💡 Для NPS: добавьте «1», «2», «3», «4», «5» — статистика по кнопкам автоматически попадёт в дашборд.
+                Каждая кнопка ≤ 25 символов.
               </div>
             </div>
 
@@ -304,7 +446,20 @@ export default function BroadcastSettings() {
                         <span style={{ fontSize: 11, color: MUTED }}>{t.category} · {t.language}</span>
                       </div>
                       <div style={{ fontSize: 13, color: '#C0C0D0', lineHeight: 1.5 }}>{t.body_text}</div>
-                      <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{t.created_at}</div>
+                      {Array.isArray(t.buttons) && t.buttons.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                          {t.buttons.map((b: any, bi: number) => (
+                            <span key={bi} style={{
+                              padding: '3px 10px', borderRadius: 14, fontSize: 11, fontWeight: 600,
+                              background: 'rgba(39,174,96,0.12)', color: '#27AE60',
+                              border: '1px solid rgba(39,174,96,0.25)',
+                            }}>
+                              ⚡ {b.text}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>{t.created_at}</div>
                     </div>
                     <button
                       onClick={() => deleteTmplMutation.mutate(t.id)}

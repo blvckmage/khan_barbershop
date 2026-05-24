@@ -161,12 +161,37 @@ export const api = {
     const response = await apiClient.get(`/waba-templates?sync=${sync}`);
     return response.data;
   },
-  createWabaTemplate: async (data: { body_text: string; category?: string; language?: string }) => {
+  createWabaTemplate: async (data: {
+    body_text: string;
+    category?: string;
+    language?: string;
+    buttons?: { type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER'; text: string; url?: string; phone_number?: string }[];
+  }) => {
     const response = await apiClient.post('/waba-templates', data);
     return response.data;
   },
   deleteWabaTemplate: async (id: number) => {
     const response = await apiClient.delete(`/waba-templates/${id}`);
+    return response.data;
+  },
+
+  // Reminder enable/disable
+  getReminderSettings: async () => {
+    const response = await apiClient.get('/reminder-settings');
+    return response.data;
+  },
+  updateReminderSettings: async (data: {
+    enable_one_hour_reminder: boolean;
+    enable_revisit_reminder: boolean;
+    enable_nps_request: boolean;
+  }) => {
+    const response = await apiClient.put('/reminder-settings', data);
+    return response.data;
+  },
+
+  // NPS statistics
+  getNpsStats: async (days = 30) => {
+    const response = await apiClient.get(`/nps-stats?days=${days}`);
     return response.data;
   },
 };

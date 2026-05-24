@@ -2,12 +2,16 @@ import json
 import logging
 import random
 import string
+import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from app.config import get_settings
 from app.services.alteegio_service import alteegio_service
 from app.services.sheets_service import sheets_service
+from app.utils.circuit_breaker import openai_breaker, CircuitOpenError
+from app.database import record_openai_usage, get_openai_usage_today
 
 settings = get_settings()
 
@@ -20,6 +24,23 @@ logger.info(f"🔄 New session prefix generated: {SESSION_PREFIX}")
 
 # Часовой пояс Almaty (UTC+5)
 ALMATY_TZ = timezone(timedelta(hours=5))
+
+# ── Время жизни сессий ────────────────────────────────────────────────────────
+BOOKING_CONTEXT_TTL = 2 * 3600   # 2 часа: сброс состояния записи без активности
+CONVERSATION_TTL    = 24 * 3600  # 24 часа: сброс всей истории без активности
+# Каждые N сообщений запускаем уборку устаревших ключей _last_activity
+LAST_ACTIVITY_CLEANUP_EVERY = 50
+# Удаляем ключи, неактивные больше этого порога (защита от unbounded grow)
+LAST_ACTIVITY_HARD_TTL = 7 * 24 * 3600   # 7 дней
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _calc_openai_cost(input_tokens: int, output_tokens: int) -> float:
+    """Calculate USD cost based on token usage and configured prices."""
+    return (
+        (input_tokens / 1_000_000) * settings.openai_input_price_per_1m
+        + (output_tokens / 1_000_000) * settings.openai_output_price_per_1m
+    )
 
 
 def format_datetime_human(dt_str: str) -> str:
@@ -297,6 +318,51 @@ class AIAgentService:
         self.model = settings.openai_model
         self.conversations: Dict[str, List[Dict]] = {}
         self.booking_context: Dict[str, Dict] = {}
+        # Timestamp последнего сообщения для каждой сессии (TTL)
+        self._last_activity: Dict[str, float] = {}
+        # Счётчик вызовов chat() для триггера периодической уборки _last_activity
+        self._chat_call_counter = 0
+
+    def _cleanup_stale_sessions(self):
+        """Удаляет ключи из _last_activity, неактивные более LAST_ACTIVITY_HARD_TTL.
+
+        Защищает от unbounded growth: каждый уникальный посетитель оставлял
+        запись в _last_activity навсегда. Запускается раз в N сообщений.
+        """
+        now_ts = time.time()
+        stale = [
+            sid for sid, ts in self._last_activity.items()
+            if now_ts - ts > LAST_ACTIVITY_HARD_TTL
+        ]
+        for sid in stale:
+            self._last_activity.pop(sid, None)
+            self.conversations.pop(sid, None)
+            self.booking_context.pop(sid, None)
+        if stale:
+            logger.info(f"   🧹 Cleaned {len(stale)} stale sessions (>7d inactive)")
+
+    async def _openai_call(self, **kwargs):
+        """Call OpenAI through circuit breaker + record token usage.
+
+        Raises CircuitOpenError if breaker is open.
+        """
+        loop = asyncio.get_event_loop()
+        # OpenAI client is sync → run in executor to avoid blocking
+        response = await openai_breaker.call(
+            lambda: loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(**kwargs)
+            )
+        )
+        # Record usage for cost tracking
+        try:
+            usage = getattr(response, "usage", None)
+            if usage:
+                cost = _calc_openai_cost(usage.prompt_tokens, usage.completion_tokens)
+                record_openai_usage(usage.prompt_tokens, usage.completion_tokens, cost)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not record OpenAI usage: {e}")
+        return response
     
     def _get_booking_context(self, session_id: str) -> Dict:
         if session_id not in self.booking_context:
@@ -618,6 +684,11 @@ class AIAgentService:
         import re
         full_session_id = f"{SESSION_PREFIX}_{session_id}"
 
+        # ── Periodic cleanup of stale _last_activity entries ─────────────────
+        self._chat_call_counter += 1
+        if self._chat_call_counter % LAST_ACTIVITY_CLEANUP_EVERY == 0:
+            self._cleanup_stale_sessions()
+
         # ── Проверяем, включён ли чатбот ────────────────────────────────────
         try:
             from app.database import get_bot_settings
@@ -628,18 +699,48 @@ class AIAgentService:
         except Exception as _e:
             logger.warning(f"   ⚠️ Could not read bot settings: {_e}")
 
+        # ── OpenAI daily cost cap ────────────────────────────────────────────
+        if settings.openai_daily_limit_usd > 0:
+            try:
+                usage_today = get_openai_usage_today()
+                if usage_today.get("cost_usd", 0) >= settings.openai_daily_limit_usd:
+                    logger.error(
+                        f"   💸 OpenAI daily cap ${settings.openai_daily_limit_usd:.2f} reached "
+                        f"(spent ${usage_today['cost_usd']:.2f}, {usage_today.get('calls', 0)} calls) — dropping message"
+                    )
+                    return "Извините, сервис временно перегружен. Попробуйте позже или позвоните нам 🙏"
+            except Exception as e:
+                logger.warning(f"   ⚠️ Could not check OpenAI usage: {e}")
+
         logger.info(f"=" * 60)
         logger.info(f"Chat: {user_input}, session: {full_session_id}")
 
         # Проверка на команду "рестарт" - сброс всего контекста
         if user_input.strip().lower() == "рестарт":
-            if full_session_id in self.conversations:
-                del self.conversations[full_session_id]
-            if full_session_id in self.booking_context:
-                del self.booking_context[full_session_id]
+            self.conversations.pop(full_session_id, None)
+            self.booking_context.pop(full_session_id, None)
+            self._last_activity.pop(full_session_id, None)
             logger.info(f"   🔄 Session reset by user command 'рестарт'")
             return "Сессия сброшена. Начинаем заново! Чем могу помочь?"
-        
+
+        # ── TTL: сброс устаревшего контекста ─────────────────────────────────
+        now_ts = time.time()
+        last_ts = self._last_activity.get(full_session_id, now_ts)
+        elapsed = now_ts - last_ts
+
+        if elapsed > CONVERSATION_TTL:
+            # 24+ часа без активности — полный сброс (история + контекст записи)
+            self.conversations.pop(full_session_id, None)
+            self.booking_context.pop(full_session_id, None)
+            logger.info(f"   ⏰ Full session reset (24h TTL elapsed) for {session_id}")
+        elif elapsed > BOOKING_CONTEXT_TTL:
+            # 2+ часа без активности — сброс только незавершённого контекста записи
+            self.booking_context.pop(full_session_id, None)
+            logger.info(f"   ⏰ Booking context reset (2h TTL elapsed) for {session_id}")
+
+        self._last_activity[full_session_id] = now_ts
+        # ─────────────────────────────────────────────────────────────────────
+
         ctx = self._get_booking_context(full_session_id)
         logger.info(f"   Context: {ctx}")
         
@@ -890,23 +991,27 @@ class AIAgentService:
         
         messages.append({"role": "user", "content": user_message})
         
-        # Call OpenAI
-        response = self.client.chat.completions.create(
-            model=self.model, messages=messages, tools=TOOLS, tool_choice="auto", max_tokens=600
-        )
-        assistant_message = response.choices[0].message
-
-        # Handle tool calls (loop until no more tool calls)
-        while assistant_message.tool_calls:
-            messages.append(assistant_message)
-            for tool_call in assistant_message.tool_calls:
-                args = json.loads(tool_call.function.arguments)
-                result = await self._execute_tool(tool_call.function.name, args, full_session_id)
-                messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False, default=str)})
-            response = self.client.chat.completions.create(
+        # Call OpenAI (through circuit breaker + cost tracking)
+        try:
+            response = await self._openai_call(
                 model=self.model, messages=messages, tools=TOOLS, tool_choice="auto", max_tokens=600
             )
             assistant_message = response.choices[0].message
+
+            # Handle tool calls (loop until no more tool calls)
+            while assistant_message.tool_calls:
+                messages.append(assistant_message)
+                for tool_call in assistant_message.tool_calls:
+                    args = json.loads(tool_call.function.arguments)
+                    result = await self._execute_tool(tool_call.function.name, args, full_session_id)
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False, default=str)})
+                response = await self._openai_call(
+                    model=self.model, messages=messages, tools=TOOLS, tool_choice="auto", max_tokens=600
+                )
+                assistant_message = response.choices[0].message
+        except CircuitOpenError as e:
+            logger.error(f"   🚨 OpenAI circuit OPEN — falling back: {e}")
+            return "Извините, сейчас не могу ответить. Попробуйте через пару минут или позвоните нам 🙏"
         
         response_text = assistant_message.content or ""
         

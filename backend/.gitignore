@@ -19,9 +19,17 @@ env/
 .env
 .env.local
 
-# Google Credentials
+# Google Credentials (NEVER commit)
 credentials.json
-*.json
+google-credentials.json
+service-account.json
+*-credentials.json
+
+# SQLite DB (production data lives in volume, not in git)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Logs
 *.log

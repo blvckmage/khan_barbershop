@@ -11,7 +11,11 @@ from ..database import (
     add_broadcast_log, delete_broadcast, verify_user, get_broadcast_settings,
     update_broadcast_settings, get_bot_settings, update_bot_settings,
     get_waba_templates, add_waba_template, update_waba_template_status, delete_waba_template,
+    get_nps_stats, get_reminder_settings, update_reminder_settings,
+    get_openai_usage_today, get_openai_usage_history, cleanup_old_data,
 )
+from ..config import get_settings as _get_app_settings
+from ..utils.circuit_breaker import alteegio_breaker, openai_breaker
 from ..services.alteegio_service import alteegio_service
 from ..services.whatsapp_service import whatsapp_service
 
@@ -51,6 +55,14 @@ class WabaTemplateCreate(BaseModel):
     body_text: str
     category: str = "MARKETING"
     language: str = "ru"
+    # Optional Quick Reply buttons (max 10). Each = {"text": "Записаться"}
+    buttons: Optional[list[dict]] = None
+
+
+class ReminderSettingsUpdate(BaseModel):
+    enable_one_hour_reminder: bool
+    enable_revisit_reminder: bool
+    enable_nps_request: bool
 
 # Simple token verification
 def verify_token(authorization: Optional[str] = Header(None)):
@@ -474,30 +486,32 @@ async def create_waba_template(data: WabaTemplateCreate, token: str = Depends(ve
     slug_latin = re.sub(r'[^a-z0-9_]', '', slug_latin)[:20]
     template_name = f"khan_{slug_latin}_{int(time.time()) % 100000}"
 
-    # Submit to Meta
+    # Submit to Meta (with optional buttons)
     meta_result = await whatsapp_service.submit_template_to_meta(
         name=template_name,
         body_text=data.body_text,
         category=data.category,
         language=data.language,
+        buttons=data.buttons,
     )
 
     if "error" in meta_result:
         # Save locally even if Meta submission failed (can retry later)
         tmpl = add_waba_template(
             template_name, data.body_text, data.category, data.language,
-            meta_status="ERROR", meta_id=None
+            meta_status="ERROR", meta_id=None, buttons=data.buttons,
         )
         return {
             "template": tmpl,
             "meta_error": meta_result["error"],
-            "warning": "Шаблон сохранён локально, но не был отправлен в Meta. Проверьте WHATSAPP_WABA_ID в .env"
+            "warning": f"Шаблон сохранён локально, но не был отправлен в Meta: {meta_result['error']}"
         }
 
     tmpl = add_waba_template(
         template_name, data.body_text, data.category, data.language,
         meta_status=meta_result.get("meta_status", "PENDING"),
-        meta_id=meta_result.get("meta_id")
+        meta_id=meta_result.get("meta_id"),
+        buttons=data.buttons,
     )
     return {"template": tmpl, "meta_result": meta_result}
 
@@ -507,3 +521,87 @@ async def delete_waba_template_route(template_id: int, token: str = Depends(veri
     """Удаляет шаблон из локальной БД."""
     delete_waba_template(template_id)
     return {"success": True}
+
+
+# ─── Reminder enable/disable ──────────────────────────────────────────────────
+
+@router.get("/reminder-settings")
+async def get_reminder_settings_route(token: str = Depends(verify_token)):
+    """Return current enable flags for all automated reminders."""
+    return get_reminder_settings()
+
+
+@router.put("/reminder-settings")
+async def update_reminder_settings_route(data: ReminderSettingsUpdate, token: str = Depends(verify_token)):
+    """Update enable flags. Disabled reminders are skipped by APScheduler jobs immediately."""
+    return update_reminder_settings(
+        enable_one_hour_reminder=data.enable_one_hour_reminder,
+        enable_revisit_reminder=data.enable_revisit_reminder,
+        enable_nps_request=data.enable_nps_request,
+    )
+
+
+# ─── OpenAI usage / cost ──────────────────────────────────────────────────────
+
+@router.get("/openai-usage")
+async def get_openai_usage_route(days: int = 30, token: str = Depends(verify_token)):
+    """OpenAI token spend statistics.
+
+    Returns:
+      - today: today's tokens + cost
+      - history: per-day for the last N days
+      - daily_limit_usd: configured cap (0 = no cap)
+      - circuit_state: openai circuit breaker state
+    """
+    cfg = _get_app_settings()
+    return {
+        "today": get_openai_usage_today(),
+        "history": get_openai_usage_history(days),
+        "daily_limit_usd": cfg.openai_daily_limit_usd,
+        "circuit_state": openai_breaker.snapshot(),
+    }
+
+
+# ─── Diagnostics: circuit breakers + manual cleanup ───────────────────────────
+
+@router.get("/diagnostics")
+async def get_diagnostics(token: str = Depends(verify_token)):
+    """Live diagnostics for monitoring critical subsystems."""
+    return {
+        "circuits": {
+            "alteegio": alteegio_breaker.snapshot(),
+            "openai": openai_breaker.snapshot(),
+        },
+        "openai_today": get_openai_usage_today(),
+    }
+
+
+@router.post("/cleanup")
+async def trigger_cleanup(token: str = Depends(verify_token)):
+    """Manually trigger cleanup of old logs / webhook dedup."""
+    cfg = _get_app_settings()
+    deleted = cleanup_old_data(
+        log_days=cfg.log_retention_days,
+        webhook_hours=cfg.webhook_dedup_retention_hours,
+    )
+    return {"deleted": deleted}
+
+
+# ─── NPS statistics ───────────────────────────────────────────────────────────
+
+@router.get("/nps-stats")
+async def get_nps_stats_route(days: int = 30, token: str = Depends(verify_token)):
+    """NPS aggregated statistics for the admin dashboard.
+
+    Query params:
+      - days: lookback window (default 30).
+
+    Returns:
+      - total_responses, avg_rating, distribution (1..5 → count)
+      - by_master: [{master, avg, count}]
+      - trend: [{day, avg, count}]
+      - recent: latest 10 ratings
+    """
+    # Clamp to reasonable range
+    days = max(1, min(days, 365))
+    return get_nps_stats(days)

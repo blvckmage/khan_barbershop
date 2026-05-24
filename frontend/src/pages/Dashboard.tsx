@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { api } from '../api/client';
 
 const GOLD = '#C9A84C';
@@ -68,6 +69,13 @@ export default function Dashboard() {
     queryKey: ['bot-settings'],
     queryFn: api.getBotSettings,
     refetchInterval: 15_000,
+  });
+
+  const { data: nps, isLoading: npsLoading, error: npsError } = useQuery({
+    queryKey: ['nps-stats'],
+    queryFn: () => api.getNpsStats(30),
+    refetchInterval: 60_000,
+    retry: 1,
   });
 
   const botEnabled: boolean = botSettings?.chatbot_enabled ?? true;
@@ -245,6 +253,9 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* NPS Statistics */}
+      <NpsSection nps={nps} isLoading={npsLoading} error={npsError} />
+
       {/* Masters */}
       <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
         <SectionHeader title="Мастера" />
@@ -276,6 +287,186 @@ export default function Dashboard() {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── NPS Section ──────────────────────────────────────────────────────────────
+
+type NpsData = {
+  total_responses: number;
+  avg_rating: number;
+  distribution: Record<string, number>;
+  by_master: { master: string; avg: number; count: number }[];
+  trend: { day: string; avg: number; count: number }[];
+  recent: { rating: number; master_name: string | null; client_name: string | null; comment: string | null; created_at: string }[];
+  period_days: number;
+};
+
+function ratingColor(r: number): string {
+  if (r >= 5) return '#27AE60';
+  if (r >= 4) return '#7DC383';
+  if (r >= 3) return GOLD;
+  if (r >= 2) return '#F39C12';
+  return '#E74C3C';
+}
+
+function NpsSection({ nps, isLoading, error }: { nps: NpsData | undefined; isLoading: boolean; error: unknown }) {
+  // 1) Loading
+  if (isLoading) {
+    return (
+      <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
+        <SectionHeader title="⭐ NPS — Оценки клиентов" />
+        <div style={{ color: MUTED, fontSize: 13 }}>⏳ Загрузка...</div>
+      </div>
+    );
+  }
+
+  // 2) Error — usually means backend isn't restarted after schema change
+  if (error || !nps) {
+    const errMsg = (error as any)?.response?.status === 404
+      ? 'Эндпоинт /api/admin/nps-stats не найден. Перезапустите backend для применения новой схемы БД.'
+      : (error as any)?.message ?? 'Не удалось загрузить статистику NPS';
+    return (
+      <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
+        <SectionHeader title="⭐ NPS — Оценки клиентов" />
+        <div style={{
+          color: '#E74C3C', fontSize: 13, padding: '14px 16px',
+          background: 'rgba(231,76,60,0.08)', borderRadius: 10,
+          border: '1px solid rgba(231,76,60,0.2)',
+        }}>
+          ⚠️ {errMsg}
+        </div>
+      </div>
+    );
+  }
+
+  // 3) Empty state
+  if (nps.total_responses === 0) {
+    return (
+      <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
+        <SectionHeader title={`⭐ NPS — Оценки клиентов (${nps.period_days} дн.)`} />
+        <div style={{ color: MUTED, fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+          Пока нет ни одной оценки. Они появятся, когда клиенты начнут отвечать на NPS-запросы после визитов.
+        </div>
+      </div>
+    );
+  }
+
+  // Chart data
+  const chartData = ['1', '2', '3', '4', '5'].map(r => ({
+    rating: `${r} ⭐`,
+    count: nps.distribution[r] || 0,
+    color: ratingColor(Number(r)),
+  }));
+
+  const accent = ratingColor(nps.avg_rating);
+
+  return (
+    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
+      <SectionHeader title={`⭐ NPS — Оценки клиентов (за ${nps.period_days} дн.)`} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 24, marginBottom: 24 }}>
+        {/* Big average rating card */}
+        <div style={{
+          background: SURFACE2, borderRadius: 12, padding: '24px 16px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          border: `1px solid ${accent}30`,
+        }}>
+          <div style={{ fontSize: 11, color: MUTED, marginBottom: 8, fontWeight: 500, letterSpacing: 1 }}>
+            СРЕДНИЙ БАЛЛ
+          </div>
+          <div style={{ fontSize: 56, fontWeight: 800, color: accent, lineHeight: 1 }}>
+            {nps.avg_rating.toFixed(1)}
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 8 }}>из 5</div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BORDER}`, width: '100%', textAlign: 'center' }}>
+            {nps.total_responses} {nps.total_responses === 1 ? 'оценка' : nps.total_responses < 5 ? 'оценки' : 'оценок'}
+          </div>
+        </div>
+
+        {/* Distribution bar chart */}
+        <div style={{ background: SURFACE2, borderRadius: 12, padding: '16px 12px' }}>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, paddingLeft: 8 }}>
+            Распределение оценок
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={chartData} margin={{ top: 5, right: 8, left: -20, bottom: 0 }}>
+              <XAxis dataKey="rating" tick={{ fill: MUTED, fontSize: 12 }} axisLine={{ stroke: BORDER }} tickLine={false} />
+              <YAxis tick={{ fill: MUTED, fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: '#F0F0F0' }}
+                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+              />
+              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                {chartData.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* By master + recent */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        {/* By master */}
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#D0D0D0', marginBottom: 10 }}>
+            По мастерам
+          </div>
+          {nps.by_master.length === 0 ? (
+            <div style={{ fontSize: 12, color: MUTED }}>Нет данных по мастерам</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {nps.by_master.map(m => (
+                <div key={m.master} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '8px 12px', borderRadius: 8, background: SURFACE2,
+                }}>
+                  <div style={{ flex: 1, fontSize: 13, color: '#F0F0F0', fontWeight: 500 }}>{m.master}</div>
+                  <div style={{
+                    fontSize: 13, fontWeight: 700, color: ratingColor(m.avg),
+                    minWidth: 36, textAlign: 'right',
+                  }}>
+                    {m.avg.toFixed(1)}
+                  </div>
+                  <div style={{ fontSize: 11, color: MUTED, minWidth: 40, textAlign: 'right' }}>
+                    {m.count} {m.count === 1 ? 'отз.' : 'отз.'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Recent ratings */}
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#D0D0D0', marginBottom: 10 }}>
+            Последние оценки
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
+            {nps.recent.map((r, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '8px 12px', borderRadius: 8, background: SURFACE2,
+              }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: 6, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 13, fontWeight: 800,
+                  background: `${ratingColor(r.rating)}20`, color: ratingColor(r.rating),
+                }}>{r.rating}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: '#F0F0F0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {r.client_name || 'Клиент'} → {r.master_name || '—'}
+                  </div>
+                  <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>{r.created_at}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

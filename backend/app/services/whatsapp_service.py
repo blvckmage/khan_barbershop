@@ -4,12 +4,17 @@ Handles outgoing WhatsApp messages through Meta Graph API.
 """
 import logging
 import asyncio
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import httpx
 from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# 24-hour customer service window. WhatsApp allows free-form text only within
+# 24h of the last incoming message from the client. We use 23h to leave margin.
+WA_24H_WINDOW_SECONDS = 23 * 3600
 
 
 class WhatsAppCloudService:
@@ -184,8 +189,21 @@ class WhatsAppCloudService:
 
     async def submit_template_to_meta(self, name: str, body_text: str,
                                        category: str = "MARKETING",
-                                       language: str = "ru") -> dict:
+                                       language: str = "ru",
+                                       buttons: list[dict] | None = None) -> dict:
         """Submit a new message template to Meta for approval.
+
+        Args:
+            name: template name (must be lowercase + underscores, unique within WABA)
+            body_text: body text with optional {{1}}, {{2}}... placeholders
+            category: MARKETING | UTILITY | AUTHENTICATION
+            language: language code (ru, en, kk, etc.)
+            buttons: optional list of buttons. Each item:
+                {"type": "QUICK_REPLY", "text": "Записаться"}
+                {"type": "URL", "text": "Открыть сайт", "url": "https://..."}
+                {"type": "PHONE_NUMBER", "text": "Позвонить", "phone_number": "+7..."}
+                Limits: up to 10 Quick Reply, up to 2 URL/PHONE_NUMBER (mixed up to 10 total).
+
         Requires WHATSAPP_WABA_ID to be configured.
         """
         waba_id = settings.whatsapp_waba_id
@@ -199,15 +217,38 @@ class WhatsAppCloudService:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
+
+        components: list[dict] = [
+            {"type": "BODY", "text": body_text}
+        ]
+
+        # Optional buttons component
+        if buttons:
+            meta_buttons = []
+            for btn in buttons[:10]:  # Meta hard limit: 10 buttons
+                btype = (btn.get("type") or "QUICK_REPLY").upper()
+                text = (btn.get("text") or "").strip()
+                if not text or len(text) > 25:
+                    # Meta requires text ≤ 25 chars
+                    continue
+                entry = {"type": btype, "text": text}
+                if btype == "URL" and btn.get("url"):
+                    entry["url"] = btn["url"]
+                elif btype == "PHONE_NUMBER" and btn.get("phone_number"):
+                    entry["phone_number"] = btn["phone_number"]
+                meta_buttons.append(entry)
+            if meta_buttons:
+                components.append({"type": "BUTTONS", "buttons": meta_buttons})
+
         payload = {
             "name": name,
             "category": category,
             "allow_category_change": True,
             "language": language,
-            "components": [
-                {"type": "BODY", "text": body_text}
-            ]
+            "components": components,
         }
+        logger.info(f"📤 Submitting template '{name}' to Meta with {len(components)} components")
+
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
@@ -263,38 +304,129 @@ class WhatsAppCloudService:
             return {"error": str(e)}
 
     # ─── Reminder helpers ────────────────────────────────────────────────────
+    #
+    # All three reminders are BUSINESS-INITIATED messages sent to clients who
+    # are likely outside the 24-hour reply window. WhatsApp policy requires
+    # APPROVED message templates for such messages.
+    #
+    # Strategy: try the configured template first; if it fails (not configured,
+    # not approved yet, or any API error) fall back to plain text — which only
+    # works if the 24h window is still open, but is useful during development
+    # and as a graceful degradation.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _send_template_or_fallback(
+        self,
+        to: str,
+        template_name: str,
+        body_params: list[str],
+        fallback_text: str,
+    ) -> dict:
+        """Try sending an approved template; on failure, fall back to plain text.
+
+        Before falling back to plain text, checks the 24-hour customer service
+        window — if closed, returns an error without spending a doomed Meta call.
+        """
+        # Path A: template configured → try it first
+        if template_name:
+            result = await self.send_template_message(
+                to=to,
+                template_name=template_name,
+                language_code=settings.template_language,
+                body_params=body_params,
+            )
+            if "error" not in result:
+                return result
+            logger.warning(
+                f"⚠️ Template '{template_name}' failed ({result.get('error')}). "
+                f"Falling back to plain text if 24h window is open."
+            )
+
+        # ── Path B: plain text fallback — check 24h window first ────────────
+        if not self._is_24h_window_open(to):
+            logger.warning(
+                f"📭 24h window closed for {to} — skipping plain text send. "
+                f"Configure an approved template for this reminder type."
+            )
+            return {
+                "error": "24h_window_closed",
+                "detail": "Cannot send free-form text outside the 24-hour customer service window. Use an approved template."
+            }
+
+        return await self.send_whatsapp_message(to, fallback_text)
+
+    @staticmethod
+    def _is_24h_window_open(phone: str) -> bool:
+        """Check if the WhatsApp 24-hour session window is still open for `phone`.
+
+        Returns True if the last incoming user message was within ~23h.
+        Returns True (permissive) if we have no record — first contact, can't be sure.
+        """
+        # Local import to avoid circular dep (database → ... → whatsapp_service)
+        from app.database import get_last_user_message_at
+        try:
+            last_at = get_last_user_message_at(phone)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check 24h window for {phone}: {e}")
+            return True  # fail-open: don't block legitimate sends on DB error
+        if last_at is None:
+            return False  # never spoke to us → window not open
+        elapsed = (datetime.now() - last_at).total_seconds()
+        return elapsed < WA_24H_WINDOW_SECONDS
 
     async def send_one_hour_reminder(self, to: str, client_name: str, master_name: str, datetime_str: str) -> dict:
-        message = f"""
-⏳ Ждём вас через час!
-
-👤 {client_name}, до вашей записи осталось 60 минут.
-💈 Мастер: {master_name}
-⏰ Время: {datetime_str}
-📍 Адрес: Момышулы 55
-
-Если вы не успеваете - позвоните нам, мы перенесём запись.
-"""
-        return await self.send_whatsapp_message(to, message.strip())
+        """Send 1-hour-before-appointment reminder.
+        Template body should have 3 placeholders: {{1}}=name, {{2}}=master, {{3}}=time
+        """
+        fallback = (
+            f"⏳ Ждём вас через час!\n\n"
+            f"👤 {client_name}, до вашей записи осталось 60 минут.\n"
+            f"💈 Мастер: {master_name}\n"
+            f"⏰ Время: {datetime_str}\n"
+            f"📍 Адрес: Момышулы 55\n\n"
+            f"Если вы не успеваете — позвоните нам, мы перенесём запись."
+        )
+        return await self._send_template_or_fallback(
+            to=to,
+            template_name=settings.template_one_hour_reminder,
+            body_params=[client_name, master_name, datetime_str],
+            fallback_text=fallback,
+        )
 
     async def send_revisit_reminder(self, to: str, client_name: str, last_visit_date: str) -> Dict[str, Any]:
-        message = f"""💈 Привет, {client_name}!
-
-Прошло 20 дней с вашего последнего визита {last_visit_date}. Пришло время записаться снова.
-
-Напишите нам в WhatsApp или позвоните по номеру +7XXXXXXXXXX.
-
-Ждём вас в KHAN Barbershop! 👋"""
-        return await self.send_whatsapp_message(to, message)
+        """Send 20-days-after-visit revisit reminder.
+        Template body should have 2 placeholders: {{1}}=name, {{2}}=last_visit_date
+        """
+        fallback = (
+            f"💈 Привет, {client_name}!\n\n"
+            f"Прошло 20 дней с вашего последнего визита {last_visit_date}. "
+            f"Пришло время записаться снова.\n\n"
+            f"Просто напишите нам в WhatsApp — бот подберёт удобное время.\n\n"
+            f"Ждём вас в KHAN Barbershop! 👋"
+        )
+        return await self._send_template_or_fallback(
+            to=to,
+            template_name=settings.template_revisit_reminder,
+            body_params=[client_name, last_visit_date],
+            fallback_text=fallback,
+        )
 
     async def send_nps_request(self, to: str, client_name: str, master_name: str) -> Dict[str, Any]:
-        message = f"""Здравствуйте, {client_name}! ✂️
-
-Вы недавно посетили KHAN Barbershop у мастера {master_name}.
-Пожалуйста, оцените вашу стрижку от 1 до 5!
-
-(Отправьте цифру в ответ на это сообщение)"""
-        return await self.send_whatsapp_message(to, message)
+        """Send NPS rating request ~1h after appointment ends.
+        Template body should have 2 placeholders: {{1}}=name, {{2}}=master
+        """
+        fallback = (
+            f"Здравствуйте, {client_name}! ✂️\n\n"
+            f"Вы недавно посетили KHAN Barbershop у мастера {master_name}.\n"
+            f"Пожалуйста, оцените вашу стрижку от 1 до 5!\n\n"
+            f"(Отправьте цифру в ответ на это сообщение)"
+        )
+        return await self._send_template_or_fallback(
+            to=to,
+            template_name=settings.template_nps_request,
+            body_params=[client_name, master_name],
+            fallback_text=fallback,
+        )
 
 
 whatsapp_service = WhatsAppCloudService()
