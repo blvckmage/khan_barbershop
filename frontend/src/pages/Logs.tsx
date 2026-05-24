@@ -1,396 +1,476 @@
-import { useState, useEffect } from 'react';
-import {
-  Box,
-  Paper,
-  Typography,
-  Tabs,
-  Tab,
-  List,
-  ListItemButton,
-  ListItemText,
-  Chip,
-  IconButton,
-  Divider,
-  TextField,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  Select,
-  MenuItem,
-} from '@mui/material';
-import {
-  Refresh as RefreshIcon,
-  Download as DownloadIcon,
-  Close as CloseIcon,
-} from '@mui/icons-material';
+import { useState, useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 
-interface ChatLog {
-  id: number;
+const SURFACE  = '#16161F';
+const SURFACE2 = '#1E1E2A';
+const SURFACE3 = '#22222E';
+const BORDER   = 'rgba(255,255,255,0.07)';
+const MUTED    = '#7A7A8C';
+const GOLD     = '#C9A84C';
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function levelColor(level: string) {
+  if (level.includes('ERROR') || level.includes('ERR')) return '#E74C3C';
+  if (level.includes('WARN')) return '#F39C12';
+  if (level.includes('DEBUG')) return '#7A7A8C';
+  return '#27AE60';
+}
+
+function fmtPhone(p: string) {
+  const d = p?.replace(/\D/g, '') ?? '';
+  if (d.length === 11) return `+${d[0]} (${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7,9)}-${d.slice(9)}`;
+  return `+${d}`;
+}
+
+function fmtTime(ts: string) {
+  if (!ts) return '';
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'));
+  if (isNaN(d.getTime())) return ts;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 0) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (diffDays === 1) return 'вчера';
+  if (diffDays < 7) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+function truncate(s: string, n = 52) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// ─── types ──────────────────────────────────────────────────────────────────
+
+interface LogEntry {
   phone: string;
   message: string;
   response: string;
-  intent: string;
   timestamp: string;
 }
 
-interface BackendLog {
-  time: string;
-  level: string;
-  message: string;
+interface Conversation {
+  phone: string;
+  lastMessage: string;
+  lastTime: string;
+  count: number;
+  messages: LogEntry[];
 }
 
+// ─── sub-components ──────────────────────────────────────────────────────────
+
+function ContactRow({ conv, active, onClick }: {
+  conv: Conversation; active: boolean; onClick: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '12px 16px', cursor: 'pointer', transition: 'background 0.12s',
+        background: active ? `${GOLD}12` : 'transparent',
+        borderBottom: `1px solid ${BORDER}`,
+        borderLeft: active ? `3px solid ${GOLD}` : '3px solid transparent',
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.background = SURFACE2; }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        {/* Avatar */}
+        <div style={{
+          width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
+          background: active ? `${GOLD}22` : 'rgba(41,128,185,0.14)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 15, border: `1.5px solid ${active ? GOLD + '50' : 'transparent'}`,
+        }}>👤</div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: active ? GOLD : '#E8E8E8' }}>
+              {fmtPhone(conv.phone)}
+            </span>
+            <span style={{ fontSize: 10, color: MUTED, flexShrink: 0 }}>{fmtTime(conv.lastTime)}</span>
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {truncate(conv.lastMessage, 40)}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 8,
+              background: `${MUTED}18`, color: MUTED,
+            }}>{conv.count} сообщ.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatBubble({ side, text, time }: { side: 'client' | 'bot'; text: string; time: string }) {
+  const isBot = side === 'bot';
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      alignItems: isBot ? 'flex-end' : 'flex-start',
+      marginBottom: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, flexDirection: isBot ? 'row-reverse' : 'row' }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+          background: isBot ? `${GOLD}20` : 'rgba(41,128,185,0.15)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, marginBottom: 2,
+        }}>{isBot ? '🤖' : '👤'}</div>
+        <div style={{
+          maxWidth: '72%', padding: '10px 14px', borderRadius: isBot ? '14px 4px 14px 14px' : '4px 14px 14px 14px',
+          background: isBot ? `${GOLD}14` : 'rgba(41,128,185,0.12)',
+          border: `1px solid ${isBot ? GOLD + '28' : 'rgba(41,128,185,0.25)'}`,
+          fontSize: 13, color: '#E0E0E8', lineHeight: 1.55, wordBreak: 'break-word',
+        }}>
+          {text}
+        </div>
+      </div>
+      <span style={{ fontSize: 10, color: MUTED, marginTop: 3, paddingLeft: isBot ? 0 : 34, paddingRight: isBot ? 34 : 0 }}>
+        {fmtTime(time)}
+      </span>
+    </div>
+  );
+}
+
+// ─── main component ──────────────────────────────────────────────────────────
+
 export default function Logs() {
-  const [tab, setTab] = useState(0);
-  const [chatLogs, setChatLogs] = useState<ChatLog[]>([]);
-  const [backendLogs, setBackendLogs] = useState<BackendLog[]>([]);
-  const [backendTotal, setBackendTotal] = useState(0);
-  const [backendPage, setBackendPage] = useState(1);
-  const backendLimit = 100;
-  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<'chats' | 'backend'>('chats');
+  const [search, setSearch] = useState('');
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
-  const [selectedLog, setSelectedLog] = useState<ChatLog | null>(null);
-  const [openDialog, setOpenDialog] = useState(false);
-  const [filterLevel, setFilterLevel] = useState<string>('');
-  const [filterPhone, setFilterPhone] = useState<string>('');
+  const [backendPage, setBackendPage] = useState(1);
+  const [levelFilter, setLevelFilter] = useState<string>('ALL');
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const fetchChatLogs = async () => {
-    setLoading(true);
-    try {
-      const data = await api.getLogs(1, 100);
-      setChatLogs(data.items || []);
-    } catch (error) {
-      console.error('Failed to fetch chat logs:', error);
+  // Load lots of chat logs (200) so we can group them client-side
+  const { data: chatLogs, isLoading: chatLoading, dataUpdatedAt } = useQuery({
+    queryKey: ['logs-all'],
+    queryFn: () => api.getLogs(1, 200),
+    refetchInterval: 30_000,
+    enabled: tab === 'chats',
+  });
+
+  const { data: backendLogs, isLoading: backendLoading } = useQuery({
+    queryKey: ['backend-logs', backendPage],
+    queryFn: () => api.getBackendLogs(backendPage, 150),
+    enabled: tab === 'backend',
+    refetchInterval: 15_000,
+  });
+
+  // Group chat logs by phone
+  const allItems: LogEntry[] = chatLogs?.items ?? [];
+
+  const conversations: Conversation[] = (() => {
+    const map = new Map<string, LogEntry[]>();
+    for (const log of allItems) {
+      const key = log.phone ?? 'unknown';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(log);
     }
-    setLoading(false);
-  };
+    return Array.from(map.entries())
+      .map(([phone, msgs]) => ({
+        phone,
+        messages: msgs,
+        lastMessage: msgs[msgs.length - 1]?.message ?? '',
+        lastTime: msgs[msgs.length - 1]?.timestamp ?? '',
+        count: msgs.length,
+      }))
+      .sort((a, b) => (b.lastTime > a.lastTime ? 1 : -1));
+  })();
 
-  const fetchBackendLogs = async (page = 1) => {
-    try {
-      const data = await api.getBackendLogs(page, backendLimit);
-      const logs = Array.isArray(data.logs) ? data.logs : [];
-      setBackendLogs(logs);
-      setBackendTotal(data.total || 0);
-      setBackendPage(data.page || 1);
-    } catch (error) {
-      console.error('Failed to fetch backend logs:', error);
-    }
-  };
+  const filteredConversations = search
+    ? conversations.filter(c =>
+        c.phone.includes(search) ||
+        c.messages.some(m =>
+          m.message?.toLowerCase().includes(search.toLowerCase()) ||
+          m.response?.toLowerCase().includes(search.toLowerCase())
+        )
+      )
+    : conversations;
 
+  const activeConv = selectedPhone
+    ? conversations.find(c => c.phone === selectedPhone) ?? null
+    : null;
+
+  // Auto-select first conversation on load
   useEffect(() => {
-    if (tab === 0) {
-      fetchChatLogs();
-    } else {
-      fetchBackendLogs(backendPage);
+    if (!selectedPhone && filteredConversations.length > 0) {
+      setSelectedPhone(filteredConversations[0].phone);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, backendPage]);
+  }, [conversations.length]);
 
+  // Scroll to bottom of chat when conversation changes
   useEffect(() => {
-    let ws: WebSocket;
-    if (tab === 0) {
-      const wsUrl = import.meta.env.VITE_API_URL.replace('http', 'ws') + '/api/ws/logs';
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'NEW_CHAT') {
-            setChatLogs((prev) => [data.data, ...prev]);
-          }
-        } catch (e) {
-          console.error('WS Error:', e);
-        }
-      };
-    }
-    return () => {
-      if (ws) ws.close();
-    };
-  }, [tab]);
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [selectedPhone, dataUpdatedAt]);
 
-  const handleViewLog = (log: ChatLog) => {
-    setSelectedLog(log);
-    setOpenDialog(true);
-  };
-
-  const handleDownloadLogs = () => {
-    const content = tab === 0
-      ? JSON.stringify(chatLogs, null, 2)
-      : backendLogs.map((l) => `[${l.time}] ${l.level}: ${l.message}`).join('\n');
-
-    const element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(content));
-    element.setAttribute('download', `logs-${new Date().toISOString().slice(0, 10)}.txt`);
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
-
-  const filteredBackendLogs = backendLogs.filter((log) => {
-    if (filterLevel && log.level.toUpperCase() !== filterLevel.toUpperCase()) return false;
-    return true;
+  // Backend logs
+  const backendItems: any[] = backendLogs?.logs ?? [];
+  const filteredBackend = backendItems.filter(l => {
+    const matchSearch = !search ||
+      l.message?.toLowerCase().includes(search.toLowerCase()) ||
+      l.level?.toLowerCase().includes(search.toLowerCase());
+    const matchLevel = levelFilter === 'ALL' || (l.level ?? '').includes(levelFilter);
+    return matchSearch && matchLevel;
   });
 
-  const filteredChatLogs = chatLogs.filter((log) => {
-    if (filterPhone && !log.phone.includes(filterPhone)) return false;
-    return true;
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '7px 18px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+    background: active ? `${GOLD}18` : 'transparent',
+    color: active ? GOLD : MUTED,
+    border: active ? `1px solid ${GOLD}30` : '1px solid transparent',
+    transition: 'all 0.15s',
   });
 
-  const groupedChats = filteredChatLogs.reduce((acc, log) => {
-    if (!acc[log.phone]) {
-      acc[log.phone] = [];
-    }
-    acc[log.phone].push(log);
-    return acc;
-  }, {} as Record<string, ChatLog[]>);
-
-  const sortedPhones = Object.keys(groupedChats).sort((phoneA, phoneB) => {
-    const logsA = groupedChats[phoneA];
-    const logsB = groupedChats[phoneB];
-    const lastTimeA = logsA.length ? new Date(logsA[logsA.length - 1].timestamp).getTime() : 0;
-    const lastTimeB = logsB.length ? new Date(logsB[logsB.length - 1].timestamp).getTime() : 0;
-    return lastTimeB - lastTimeA;
-  });
-
-  const sortedGroupedChats = sortedPhones.reduce((acc, phone) => {
-    acc[phone] = groupedChats[phone]
-      .slice()
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .reverse();
-    return acc;
-  }, {} as Record<string, ChatLog[]>);
-
-  const getLevelColor = (level: string): any => {
-    switch (level.toUpperCase()) {
-      case 'ERROR':
-        return 'error';
-      case 'WARNING':
-        return 'warning';
-      case 'INFO':
-        return 'info';
-      case 'DEBUG':
-        return 'default';
-      default:
-        return 'default';
-    }
-  };
+  // ── Layout ──────────────────────────────────────────────────────────────────
 
   return (
-    <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-          {tab === 0 ? 'Логи переписки' : 'Логи бэкенда'}
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={() => (tab === 0 ? fetchChatLogs() : fetchBackendLogs(backendPage))}
-            disabled={loading}
-          >
-            Обновить
-          </Button>
-          <Button variant="contained" startIcon={<DownloadIcon />} onClick={handleDownloadLogs}>
-            Скачать
-          </Button>
-        </Box>
-      </Box>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: 'calc(100vh - 112px)' }}>
 
-      <Paper sx={{ mb: 2 }}>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)}>
-          <Tab label="Переписка" />
-          <Tab label="Логи бэкенда" />
-        </Tabs>
-      </Paper>
+      {/* Top bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button style={tabStyle(tab === 'chats')} onClick={() => setTab('chats')}>💬 Чаты WhatsApp</button>
+          <button style={tabStyle(tab === 'backend')} onClick={() => setTab('backend')}>🖥 Логи сервера</button>
+        </div>
+        <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
+          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: MUTED }}>🔍</span>
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setSelectedPhone(null); }}
+            placeholder={tab === 'chats' ? 'Поиск по номеру или тексту...' : 'Поиск в логах...'}
+            style={{
+              width: '100%', padding: '8px 12px 8px 34px', borderRadius: 8, fontSize: 13,
+              background: SURFACE, border: `1px solid ${BORDER}`, color: '#F0F0F0', outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+        {tab === 'chats' && (
+          <span style={{ fontSize: 12, color: MUTED, flexShrink: 0 }}>
+            {filteredConversations.length} диалог{filteredConversations.length !== 1 ? 'ов' : ''}
+          </span>
+        )}
+        {tab === 'backend' && (
+          <div style={{ display: 'flex', gap: 5 }}>
+            {['ALL', 'INFO', 'WARN', 'ERROR', 'DEBUG'].map(lvl => (
+              <button key={lvl} onClick={() => setLevelFilter(lvl)} style={{
+                padding: '5px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${levelFilter === lvl ? levelColor(lvl) + '60' : BORDER}`,
+                background: levelFilter === lvl ? levelColor(lvl) + '18' : 'transparent',
+                color: levelFilter === lvl ? levelColor(lvl) : MUTED,
+              }}>{lvl}</button>
+            ))}
+          </div>
+        )}
+      </div>
 
-      {tab === 0 && (
-        <Box>
-          <Paper sx={{ p: 2, mb: 2 }}>
-            <TextField
-              placeholder="Поиск по номеру телефона..."
-              value={filterPhone}
-              onChange={(e) => setFilterPhone(e.target.value)}
-              fullWidth
-              size="small"
-            />
-          </Paper>
+      {/* ── CHATS TAB ─────────────────────────────────────────────────────── */}
+      {tab === 'chats' && (
+        <div style={{
+          flex: 1, display: 'flex', borderRadius: 14, overflow: 'hidden',
+          border: `1px solid ${BORDER}`, background: SURFACE, minHeight: 0,
+        }}>
 
-          <Paper sx={{ display: 'flex', height: '600px' }}>
-            <Box sx={{ width: '35%', borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
-              <List sx={{ p: 0 }}>
-                {sortedPhones.map((phone) => {
-                  const logs = sortedGroupedChats[phone] || [];
-                  return (
-                    <Box key={phone}>
-                      <ListItemButton selected={selectedPhone === phone} onClick={() => setSelectedPhone(phone)}>
-                        <ListItemText primary={phone} secondary={`${logs.length} сообщений`} />
-                      </ListItemButton>
-                      <Divider />
-                    </Box>
-                  );
-                })}
-              </List>
-            </Box>
+          {/* Left: contact list */}
+          <div style={{
+            width: 300, flexShrink: 0, borderRight: `1px solid ${BORDER}`,
+            overflowY: 'auto', display: 'flex', flexDirection: 'column',
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '14px 16px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#E0E0E8' }}>Диалоги</span>
+              <span style={{ fontSize: 11, color: MUTED }}>
+                {chatLoading ? '⏳' : `${filteredConversations.length}`}
+              </span>
+            </div>
 
-            <Box sx={{ width: '65%', p: 2, overflowY: 'auto' }}>
-              {selectedPhone ? (
-                <Box>
-                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold' }}>
-                    {selectedPhone}
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {sortedGroupedChats[selectedPhone]?.map((log, i) => (
-                      <Box key={i}>
-                        <Chip
-                          size="small"
-                          label={new Date(log.timestamp).toLocaleTimeString('ru-RU')}
-                          variant="outlined"
-                          sx={{ mb: 1 }}
-                        />
-                        <Paper sx={{ p: 2, mb: 1, bgcolor: 'rgba(2, 136, 209, 0.05)' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                            Сообщение клиента:
-                          </Typography>
-                          <Typography variant="body2" sx={{ mb: 2 }}>
-                            {log.message}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                            Ответ:
-                          </Typography>
-                          <Typography variant="body2" sx={{ mb: 2, fontStyle: 'italic' }}>
-                            {log.response}
-                          </Typography>
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            <Button size="small" onClick={() => handleViewLog(log)}>
-                              Подробнее
-                            </Button>
-                          </Box>
-                        </Paper>
-                      </Box>
-                    ))}
-                  </Box>
-                </Box>
-              ) : (
-                <Typography color="text.secondary" sx={{ textAlign: 'center', mt: 3 }}>
-                  Выберите чат для просмотра сообщений
-                </Typography>
-              )}
-            </Box>
-          </Paper>
-        </Box>
+            {chatLoading ? (
+              <div style={{ padding: 32, textAlign: 'center', color: MUTED, fontSize: 13 }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
+                Загрузка диалогов...
+              </div>
+            ) : filteredConversations.length === 0 ? (
+              <div style={{ padding: 32, textAlign: 'center', color: MUTED, fontSize: 13 }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>💬</div>
+                Нет диалогов
+              </div>
+            ) : (
+              filteredConversations.map(conv => (
+                <ContactRow
+                  key={conv.phone}
+                  conv={conv}
+                  active={selectedPhone === conv.phone}
+                  onClick={() => setSelectedPhone(conv.phone)}
+                />
+              ))
+            )}
+          </div>
+
+          {/* Right: chat view */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            {!activeConv ? (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: MUTED }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+                  <div style={{ fontSize: 14 }}>Выберите диалог</div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Chat header */}
+                <div style={{
+                  padding: '14px 20px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', gap: 12, background: SURFACE,
+                }}>
+                  <div style={{
+                    width: 38, height: 38, borderRadius: '50%',
+                    background: 'rgba(41,128,185,0.15)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', fontSize: 16,
+                  }}>👤</div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#F0F0F0' }}>
+                      {fmtPhone(activeConv.phone)}
+                    </div>
+                    <div style={{ fontSize: 11, color: MUTED, marginTop: 1 }}>
+                      {activeConv.count} сообщений · последнее {fmtTime(activeConv.lastTime)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Messages */}
+                <div style={{
+                  flex: 1, overflowY: 'auto', padding: '20px 24px',
+                  display: 'flex', flexDirection: 'column',
+                  background: SURFACE3,
+                }}>
+                  {/* Date separator for oldest message */}
+                  {activeConv.messages.length > 0 && (
+                    <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                      <span style={{
+                        fontSize: 11, color: MUTED, background: SURFACE2,
+                        padding: '3px 10px', borderRadius: 10,
+                      }}>
+                        {new Date(activeConv.messages[0].timestamp?.includes('T')
+                          ? activeConv.messages[0].timestamp
+                          : activeConv.messages[0].timestamp?.replace(' ', 'T') ?? '')
+                          .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
+                      </span>
+                    </div>
+                  )}
+
+                  {activeConv.messages.map((msg, i) => (
+                    <div key={i}>
+                      {/* Show date separator between days */}
+                      {i > 0 && (() => {
+                        const prev = activeConv.messages[i - 1].timestamp ?? '';
+                        const curr = msg.timestamp ?? '';
+                        const prevDay = prev.slice(0, 10);
+                        const currDay = curr.slice(0, 10);
+                        if (prevDay !== currDay) {
+                          return (
+                            <div style={{ textAlign: 'center', margin: '16px 0' }}>
+                              <span style={{
+                                fontSize: 11, color: MUTED, background: SURFACE2,
+                                padding: '3px 10px', borderRadius: 10,
+                              }}>
+                                {new Date(currDay).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
+                              </span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+
+                      {msg.message && (
+                        <ChatBubble side="client" text={msg.message} time={msg.timestamp} />
+                      )}
+                      {msg.response && (
+                        <ChatBubble side="bot" text={msg.response} time={msg.timestamp} />
+                      )}
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
-      {tab === 1 && (
-        <Box>
-          <Paper sx={{ p: 2, mb: 2 }}>
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <Select
-                value={filterLevel}
-                onChange={(e) => setFilterLevel(e.target.value as string)}
-                size="small"
-                displayEmpty
-                sx={{ minWidth: 200 }}
-              >
-                <MenuItem value="">Все уровни</MenuItem>
-                <MenuItem value="ERROR">ERROR</MenuItem>
-                <MenuItem value="WARNING">WARNING</MenuItem>
-                <MenuItem value="INFO">INFO</MenuItem>
-                <MenuItem value="DEBUG">DEBUG</MenuItem>
-              </Select>
-            </Box>
-          </Paper>
+      {/* ── BACKEND LOGS TAB ─────────────────────────────────────────────── */}
+      {tab === 'backend' && (
+        <div style={{
+          flex: 1, borderRadius: 14, overflow: 'hidden',
+          border: `1px solid ${BORDER}`, background: SURFACE,
+          display: 'flex', flexDirection: 'column', minHeight: 0,
+        }}>
+          <div style={{ flex: 1, overflowY: 'auto', fontFamily: 'ui-monospace, Consolas, monospace' }}>
+            {backendLoading ? (
+              <div style={{ padding: 40, textAlign: 'center', color: MUTED }}>Загрузка...</div>
+            ) : filteredBackend.length === 0 ? (
+              <div style={{ padding: 40, textAlign: 'center', color: MUTED }}>Логов нет</div>
+            ) : (
+              filteredBackend.map((log: any, i: number) => (
+                <div key={i} style={{
+                  padding: '4px 16px', display: 'flex', gap: 12, fontSize: 12, alignItems: 'flex-start',
+                  borderBottom: `1px solid rgba(255,255,255,0.03)`,
+                }}
+                  onMouseEnter={e => (e.currentTarget.style.background = SURFACE2)}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ color: MUTED, flexShrink: 0, width: 128, fontSize: 11 }}>{log.time}</span>
+                  <span style={{
+                    flexShrink: 0, width: 46, fontWeight: 700, fontSize: 11,
+                    color: levelColor(log.level ?? ''),
+                  }}>
+                    {(log.level ?? 'INFO').replace('WARNING', 'WARN').replace('CRITICAL', 'CRIT').slice(0, 5)}
+                  </span>
+                  <span style={{ color: '#C0C0D0', wordBreak: 'break-all', lineHeight: 1.5 }}>{log.message}</span>
+                </div>
+              ))
+            )}
+          </div>
 
-          <Paper>
-            <List sx={{ maxHeight: '600px', overflowY: 'auto' }}>
-              {filteredBackendLogs.map((log, i) => (
-                <Box key={i}>
-                  <ListItemButton>
-                    <ListItemText
-                      primary={log.message}
-                      secondary={
-                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            {log.time}
-                          </Typography>
-                          <Chip size="small" label={log.level} color={getLevelColor(log.level)} variant="outlined" />
-                        </Box>
-                      }
-                    />
-                  </ListItemButton>
-                  <Divider />
-                </Box>
-              ))}
-            </List>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
-              <Button
-                variant="outlined"
-                disabled={backendPage <= 1}
-                onClick={() => setBackendPage((p) => Math.max(1, p - 1))}
-              >
-                Предыдущая
-              </Button>
-              <Typography variant="body2">
-                Страница {backendPage} из {Math.max(1, Math.ceil(backendTotal / backendLimit))}
-              </Typography>
-              <Button
-                variant="outlined"
-                disabled={backendPage >= Math.ceil(backendTotal / backendLimit)}
-                onClick={() => setBackendPage((p) => p + 1)}
-              >
-                Следующая
-              </Button>
-            </Box>
-          </Paper>
-        </Box>
+          {/* Pagination */}
+          <div style={{
+            padding: '10px 20px', borderTop: `1px solid ${BORDER}`,
+            display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, background: SURFACE,
+          }}>
+            <button
+              disabled={backendPage <= 1}
+              onClick={() => setBackendPage(p => p - 1)}
+              style={{
+                padding: '5px 14px', borderRadius: 6, border: `1px solid ${BORDER}`,
+                background: SURFACE2, color: backendPage <= 1 ? MUTED : '#F0F0F0',
+                cursor: backendPage <= 1 ? 'not-allowed' : 'pointer', fontSize: 12,
+              }}
+            >← Назад</button>
+            <span style={{ fontSize: 12, color: MUTED }}>Стр. {backendPage}</span>
+            <button
+              disabled={filteredBackend.length < 150}
+              onClick={() => setBackendPage(p => p + 1)}
+              style={{
+                padding: '5px 14px', borderRadius: 6, border: `1px solid ${BORDER}`,
+                background: SURFACE2, color: filteredBackend.length < 150 ? MUTED : '#F0F0F0',
+                cursor: filteredBackend.length < 150 ? 'not-allowed' : 'pointer', fontSize: 12,
+              }}
+            >Вперёд →</button>
+            <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto' }}>
+              {filteredBackend.length} строк · авто-обновление 15с
+            </span>
+          </div>
+        </div>
       )}
-
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          Детали логирования
-          <IconButton onClick={() => setOpenDialog(false)}>
-            <CloseIcon />
-          </IconButton>
-        </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {selectedLog && (
-            <Box>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Номер клиента:
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2 }}>
-                {selectedLog.phone}
-              </Typography>
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Время:
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2 }}>
-                {new Date(selectedLog.timestamp).toLocaleString('ru-RU')}
-              </Typography>
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Сообщение клиента:
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'rgba(2, 136, 209, 0.05)', borderRadius: 1 }}>
-                {selectedLog.message}
-              </Typography>
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Ответ бота:
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'rgba(2, 136, 209, 0.05)', borderRadius: 1 }}>
-                {selectedLog.response}
-              </Typography>
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Распознанное намерение (Intent):
-              </Typography>
-              <Chip label={selectedLog.intent} color="primary" />
-            </Box>
-          )}
-        </DialogContent>
-      </Dialog>
-    </Box>
+    </div>
   );
 }

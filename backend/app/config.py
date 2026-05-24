@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_access_token: str = ""
     whatsapp_verify_token: str = ""
+    # WhatsApp Business Account ID (needed for template management)
+    whatsapp_waba_id: str = ""
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

@@ -106,6 +106,21 @@ def init_db():
         )
     ''')
     
+    # WABA Templates (WhatsApp Business API approved templates)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS waba_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            body_text TEXT NOT NULL,
+            category TEXT DEFAULT 'MARKETING',
+            language TEXT DEFAULT 'ru',
+            meta_status TEXT DEFAULT 'PENDING',
+            meta_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Notification logs (to prevent duplicate sending)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS notification_logs (
@@ -152,7 +167,11 @@ def init_db():
         cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_schedule TEXT DEFAULT 'manual'")
     if 'broadcast_send_time' not in settings_columns:
         cursor.execute("ALTER TABLE settings ADD COLUMN broadcast_send_time TEXT DEFAULT '10:00'")
-    
+    if 'chatbot_enabled' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN chatbot_enabled INTEGER DEFAULT 1")
+    if 'excluded_master_ids' not in settings_columns:
+        cursor.execute("ALTER TABLE settings ADD COLUMN excluded_master_ids TEXT DEFAULT '[]'")
+
     # Insert default admin if not exists
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
     if not cursor.fetchone():
@@ -455,3 +474,84 @@ def update_broadcast_settings(data: dict):
     conn.commit()
     conn.close()
     return get_broadcast_settings()
+
+
+# ─── Bot settings (chatbot on/off + excluded masters) ───────────────────────
+
+def get_bot_settings() -> dict:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT chatbot_enabled, excluded_master_ids FROM settings LIMIT 1')
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {'chatbot_enabled': True, 'excluded_master_ids': []}
+    try:
+        excluded = json.loads(row['excluded_master_ids'] or '[]')
+    except Exception:
+        excluded = []
+    return {
+        'chatbot_enabled': bool(row['chatbot_enabled']),
+        'excluded_master_ids': excluded,
+    }
+
+
+def update_bot_settings(chatbot_enabled: bool, excluded_master_ids: list) -> dict:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE settings SET chatbot_enabled = ?, excluded_master_ids = ?',
+        (1 if chatbot_enabled else 0, json.dumps(excluded_master_ids))
+    )
+    conn.commit()
+    conn.close()
+    return get_bot_settings()
+
+
+# ─── WABA Templates ──────────────────────────────────────────────────────────
+
+def get_waba_templates() -> list:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, name, body_text, category, language, meta_status, meta_id,
+               datetime(created_at, 'localtime') as created_at
+        FROM waba_templates ORDER BY created_at DESC
+    ''')
+    items = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return items
+
+
+def add_waba_template(name: str, body_text: str, category: str, language: str,
+                      meta_status: str = 'PENDING', meta_id: str = None) -> dict:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO waba_templates (name, body_text, category, language, meta_status, meta_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (name, body_text, category, language, meta_status, meta_id))
+    row_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    items = get_waba_templates()
+    return next((t for t in items if t['id'] == row_id), {})
+
+
+def update_waba_template_status(name: str, meta_status: str, meta_id: str = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE waba_templates SET meta_status = ?, meta_id = ?, updated_at = ? WHERE name = ?',
+        (meta_status, meta_id, datetime.now().isoformat(), name)
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_waba_template(template_id: int):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM waba_templates WHERE id = ?', (template_id,))
+    conn.commit()
+    conn.close()

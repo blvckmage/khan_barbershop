@@ -1,481 +1,440 @@
-import { useState, useEffect, useMemo } from 'react';
-import {
-  Box,
-  Paper,
-  Typography,
-  TextField,
-  Button,
-  Card,
-  Switch,
-  Divider,
-  Autocomplete,
-  Chip,
-  Tabs,
-  Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  IconButton,
-} from '@mui/material';
-import {
-  Save as SaveIcon,
-  Settings as SettingsIcon,
-  Delete as DeleteIcon,
-} from '@mui/icons-material';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 
-interface BroadcastConfig {
-  enabled: boolean;
-  phoneNumbers: string;
-  messageTemplate: string;
-  schedule: string;
-  sendTime: string;
+const SURFACE = '#16161F';
+const SURFACE2 = '#1E1E2A';
+const BORDER = 'rgba(255,255,255,0.07)';
+const MUTED = '#7A7A8C';
+const GOLD = '#C9A84C';
+
+function Card({ children, style = {} }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24, ...style }}>
+      {children}
+    </div>
+  );
 }
 
-interface BroadcastClient {
-  phone: string;
-  name: string;
+function Label({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 12, color: MUTED, fontWeight: 500, marginBottom: 6 }}>{children}</div>;
+}
+
+function Input({ value, onChange, placeholder = '', type = 'text', rows }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; type?: string; rows?: number;
+}) {
+  const base: React.CSSProperties = {
+    width: '100%', padding: '10px 14px', borderRadius: 8, fontSize: 13,
+    background: SURFACE2, border: `1px solid ${BORDER}`, color: '#F0F0F0',
+    outline: 'none', transition: 'border-color 0.15s', resize: 'vertical' as const,
+  };
+  if (rows) {
+    return (
+      <textarea
+        rows={rows} value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={base}
+        onFocus={(e) => (e.target.style.borderColor = GOLD)}
+        onBlur={(e) => (e.target.style.borderColor = 'rgba(255,255,255,0.07)')}
+      />
+    );
+  }
+  return (
+    <input
+      type={type} value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      style={base}
+      onFocus={(e) => (e.target.style.borderColor = GOLD)}
+      onBlur={(e) => (e.target.style.borderColor = 'rgba(255,255,255,0.07)')}
+    />
+  );
+}
+
+function Btn({ children, onClick, disabled = false, variant = 'primary', style = {} }: {
+  children: React.ReactNode; onClick?: () => void; disabled?: boolean;
+  variant?: 'primary' | 'secondary' | 'danger'; style?: React.CSSProperties;
+}) {
+  const colors = {
+    primary: { bg: GOLD, color: '#0D0D12' },
+    secondary: { bg: SURFACE2, color: '#F0F0F0' },
+    danger: { bg: 'rgba(231,76,60,0.15)', color: '#E74C3C' },
+  };
+  const c = colors[variant];
+  return (
+    <button
+      onClick={onClick} disabled={disabled}
+      style={{
+        padding: '9px 20px', borderRadius: 8, border: `1px solid ${variant === 'primary' ? GOLD : BORDER}`,
+        background: disabled ? 'rgba(201,168,76,0.2)' : c.bg, color: disabled ? MUTED : c.color,
+        fontSize: 13, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
+        transition: 'all 0.15s', ...style,
+      }}
+    >{children}</button>
+  );
 }
 
 export default function BroadcastSettings() {
-  const [tab, setTab] = useState(0);
-  const [config, setConfig] = useState<BroadcastConfig>({
-    enabled: false,
-    phoneNumbers: '',
-    messageTemplate: '',
-    schedule: 'manual',
-    sendTime: '10:00',
-  });
-  const [clients, setClients] = useState<BroadcastClient[]>([]);
-  const [selectedClients, setSelectedClients] = useState<BroadcastClient[]>([]);
-  const [clientsLoading, setClientsLoading] = useState(false);
-  const [clientsError, setClientsError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const qc = useQueryClient();
+
+  // Tabs
+  const [tab, setTab] = useState<'send' | 'templates'>('send');
+
+  // Broadcast history
+  const { data: bData } = useQuery({ queryKey: ['broadcasts'], queryFn: () => api.getBroadcasts(1, 20) });
+  const broadcasts: any[] = bData?.items ?? [];
+
+  // Client list
+  const { data: cData, isLoading: cLoading } = useQuery({ queryKey: ['broadcast-clients'], queryFn: () => api.getBroadcastClients(30) });
+  const clients: any[] = cData?.items ?? [];
+
+  // New broadcast form
+  const [message, setMessage] = useState('');
+  const [selectedPhones, setSelectedPhones] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<string | null>(null);
-  
-  // New State for Scheduling and History
-  const [scheduledAt, setScheduledAt] = useState('');
-  const [broadcasts, setBroadcasts] = useState<any[]>([]);
+  const [result, setResult] = useState<{ success?: boolean; error?: string; sent?: number; failed?: number } | null>(null);
 
-  const recipientPhones = useMemo(() => {
-    const manualPhones = config.phoneNumbers
-      .split('\n')
-      .map((p) => p.trim())
-      .filter(Boolean);
-    const clientPhones = selectedClients.map((client) => client.phone);
-    return Array.from(new Set([...clientPhones, ...manualPhones]));
-  }, [config.phoneNumbers, selectedClients]);
+  // WABA Templates
+  const { data: tmplData, isLoading: tmplLoading, refetch: refetchTemplates } = useQuery({
+    queryKey: ['waba-templates'],
+    queryFn: () => api.getWabaTemplates(false),
+    enabled: tab === 'templates',
+  });
+  const templates: any[] = tmplData?.templates ?? [];
+  const [tmplText, setTmplText] = useState('');
+  const [tmplCategory, setTmplCategory] = useState('MARKETING');
+  const [submittingTmpl, setSubmittingTmpl] = useState(false);
+  const [tmplResult, setTmplResult] = useState<{ warning?: string; error?: string; name?: string; status?: string } | null>(null);
 
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const data = await api.getBroadcastSettings();
-        setConfig({
-          enabled: data.enabled,
-          phoneNumbers: data.phoneNumbers,
-          messageTemplate: data.messageTemplate,
-          schedule: data.schedule,
-          sendTime: data.sendTime,
-        });
-      } catch (error) {
-        console.error('Failed to load broadcast settings:', error);
-      }
-    };
-
-    loadConfig();
-  }, []);
-
-  const loadClients = async () => {
-    setClientsLoading(true);
-    setClientsError(null);
+  const submitTemplate = async () => {
+    if (!tmplText.trim()) return;
+    setSubmittingTmpl(true);
+    setTmplResult(null);
     try {
-      const data = await api.getBroadcastClients(30);
-      setClients(data.items || []);
-    } catch (error) {
-      console.error('Failed to load broadcast clients:', error);
-      setClientsError('Не удалось загрузить клиентов из Alteegio');
-    } finally {
-      setClientsLoading(false);
-    }
-  };
-
-  const loadBroadcasts = async () => {
-    try {
-      const data = await api.getBroadcasts(1, 50);
-      setBroadcasts(data.items || []);
-    } catch (error) {
-      console.error('Failed to load broadcasts:', error);
-    }
-  };
-
-  useEffect(() => {
-    if (tab === 1) {
-      loadBroadcasts();
-    }
-  }, [tab]);
-
-  const handleChange = (field: keyof BroadcastConfig, value: any) => {
-    setConfig((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-    setSaved(false);
-  };
-
-  const handleSave = async () => {
-    setLoading(true);
-    try {
-      await api.updateBroadcastSettings(config);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (error) {
-      console.error('Failed to save broadcast settings:', error);
-      alert('Не удалось сохранить настройки рассылки');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendNow = async () => {
-    const recipients = recipientPhones;
-
-    if (!recipients.length) {
-      alert('Добавьте хотя бы один телефон для рассылки.');
-      return;
-    }
-
-    if (!config.messageTemplate.trim()) {
-      alert('Введите текст сообщения для отправки.');
-      return;
-    }
-
-    setSending(true);
-    setSendResult(null);
-    try {
-      const payload: any = {
-        message: config.messageTemplate,
-        recipients,
-      };
-      
-      if (scheduledAt) {
-        payload.scheduled_at = new Date(scheduledAt).toISOString();
-      }
-
-      const result = await api.createBroadcast(payload);
-      
-      if (scheduledAt) {
-        setSendResult(`Рассылка запланирована на ${new Date(scheduledAt).toLocaleString()}`);
-        setScheduledAt('');
+      const res = await api.createWabaTemplate({ body_text: tmplText, category: tmplCategory });
+      if (res.meta_error || res.warning) {
+        setTmplResult({ warning: res.warning, name: res.template?.name });
       } else {
-        setSendResult(`Рассылка отправлена: ${result.sentCount} из ${result.recipientCount} сообщений.`);
+        setTmplResult({ name: res.template?.name, status: res.template?.meta_status });
+        setTmplText('');
       }
-    } catch (error) {
-      console.error('Failed to send broadcast:', error);
-      setSendResult('Ошибка при отправке рассылки. Проверьте конфигурацию WhatsApp Cloud API и журнал.');
-      alert('Не удалось отправить рассылку.');
+      qc.invalidateQueries({ queryKey: ['waba-templates'] });
+    } catch (e: any) {
+      setTmplResult({ error: e.message ?? 'Ошибка' });
+    } finally {
+      setSubmittingTmpl(false);
+    }
+  };
+
+  const syncTemplates = async () => {
+    await api.getWabaTemplates(true);
+    refetchTemplates();
+  };
+
+  const deleteTmplMutation = useMutation({
+    mutationFn: (id: number) => api.deleteWabaTemplate(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['waba-templates'] }),
+  });
+
+  const toggleClient = (phone: string) => {
+    setSelectedPhones((prev) => {
+      const next = new Set(prev);
+      next.has(phone) ? next.delete(phone) : next.add(phone);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedPhones.size === clients.length) {
+      setSelectedPhones(new Set());
+    } else {
+      setSelectedPhones(new Set(clients.map((c) => c.phone)));
+    }
+  };
+
+  const sendBroadcast = async () => {
+    if (!message.trim() || selectedPhones.size === 0) return;
+    setSending(true);
+    setResult(null);
+    try {
+      const res = await api.createBroadcast({ message, recipients: [...selectedPhones] });
+      setResult({ success: true, sent: res.sentCount, failed: res.failedCount });
+      setMessage('');
+      setSelectedPhones(new Set());
+      qc.invalidateQueries({ queryKey: ['broadcasts'] });
+    } catch (e: any) {
+      setResult({ error: e.message ?? 'Ошибка отправки' });
     } finally {
       setSending(false);
     }
   };
 
-  const handleDeleteBroadcast = async (id: number) => {
-    if (!window.confirm('Отменить эту запланированную рассылку?')) return;
-    try {
-      await api.deleteBroadcast(id);
-      loadBroadcasts();
-    } catch (e) {
-      alert('Ошибка при удалении рассылки');
-    }
-  };
+  const delMutation = useMutation({
+    mutationFn: (id: number) => api.deleteBroadcast(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['broadcasts'] }),
+  });
+
+  function statusColor(s: string) {
+    if (s === 'completed') return '#27AE60';
+    if (s === 'failed') return '#E74C3C';
+    if (s === 'sending') return GOLD;
+    return MUTED;
+  }
+
+  function tmplStatusColor(s: string) {
+    if (s === 'APPROVED') return '#27AE60';
+    if (s === 'REJECTED') return '#E74C3C';
+    if (s === 'PENDING' || s === 'IN_APPEAL') return GOLD;
+    if (s === 'ERROR') return '#E74C3C';
+    return MUTED;
+  }
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '8px 20px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+    background: active ? `${GOLD}18` : 'transparent',
+    color: active ? GOLD : MUTED,
+    border: active ? `1px solid ${GOLD}30` : '1px solid transparent',
+    transition: 'all 0.15s',
+  });
 
   return (
-    <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <SettingsIcon sx={{ fontSize: 32 }} />
-        <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-          Настройки рассылки
-        </Typography>
-      </Box>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100 }}>
 
-      <Paper sx={{ mb: 3 }}>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth">
-          <Tab label="Новая рассылка" />
-          <Tab label="История и Запланированные" />
-        </Tabs>
-      </Paper>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button style={tabStyle(tab === 'send')} onClick={() => setTab('send')}>📤 Рассылки</button>
+        <button style={tabStyle(tab === 'templates')} onClick={() => setTab('templates')}>📋 Шаблоны Meta</button>
+      </div>
 
-      {tab === 0 && (
-        <>
-          <Paper sx={{ mb: 3, p: 2, bgcolor: 'info.light' }}>
-            <Typography variant="body2" color="info.main">
-              Здесь вы можете загрузить клиентов из базы Alteegio, выбрать получателей и отправить или запланировать рассылку.
-            </Typography>
-          </Paper>
+      {tab === 'templates' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Info banner */}
+          <div style={{
+            padding: '14px 18px', borderRadius: 10,
+            background: 'rgba(41,128,185,0.08)', border: '1px solid rgba(41,128,185,0.2)',
+            fontSize: 13, color: '#7EC8E3', lineHeight: 1.6,
+          }}>
+            <strong style={{ color: '#B0D8F0' }}>📌 Зачем нужны шаблоны?</strong><br />
+            WhatsApp запрещает отправлять свободный текст клиентам, которые не писали вам последние 24 часа.
+            Для рассылок по «холодной» базе нужны <strong>одобренные шаблоны Meta</strong>.
+            После создания шаблон проходит проверку Meta (~24 часа). Статус «APPROVED» — можно использовать.
+            <br /><strong style={{ color: '#B0D8F0' }}>Требуется:</strong> добавить <code>WHATSAPP_WABA_ID</code> в <code>backend/.env</code>
+          </div>
 
-          {saved && (
-            <Paper sx={{ mb: 3, p: 2, bgcolor: 'success.light' }}>
-              <Typography variant="body2" color="success.main">
-                ✓ Настройки успешно сохранены
-              </Typography>
-            </Paper>
+          {/* Create template */}
+          <Card>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0', marginBottom: 16 }}>
+              ✍️ Создать новый шаблон
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <Label>Категория</Label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {['MARKETING', 'UTILITY', 'AUTHENTICATION'].map(cat => (
+                  <button key={cat} onClick={() => setTmplCategory(cat)} style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    background: tmplCategory === cat ? `${GOLD}20` : SURFACE2,
+                    color: tmplCategory === cat ? GOLD : MUTED,
+                    border: `1px solid ${tmplCategory === cat ? GOLD + '50' : 'transparent'}`,
+                  }}>{cat}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <Label>Текст сообщения</Label>
+              <Input
+                value={tmplText}
+                onChange={setTmplText}
+                rows={4}
+                placeholder={'Привет! Это KHAN Barbershop. Записаться можно прямо здесь — просто напишите нам!'}
+              />
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+                💡 Используйте {'{{1}}'}, {'{{2}}'} и т.д. для переменных (имя клиента, дата и т.п.)
+              </div>
+            </div>
+
+            {tmplResult && (
+              <div style={{
+                marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13,
+                background: tmplResult.error ? 'rgba(231,76,60,0.1)' : tmplResult.warning ? 'rgba(241,196,15,0.1)' : 'rgba(39,174,96,0.1)',
+                border: `1px solid ${tmplResult.error ? 'rgba(231,76,60,0.3)' : tmplResult.warning ? 'rgba(241,196,15,0.3)' : 'rgba(39,174,96,0.3)'}`,
+                color: tmplResult.error ? '#E74C3C' : tmplResult.warning ? '#F1C40F' : '#27AE60',
+              }}>
+                {tmplResult.error && `❌ ${tmplResult.error}`}
+                {tmplResult.warning && `⚠️ ${tmplResult.warning}`}
+                {!tmplResult.error && !tmplResult.warning && tmplResult.name && (
+                  <>✅ Шаблон <strong>{tmplResult.name}</strong> отправлен на проверку Meta. Статус: {tmplResult.status}</>
+                )}
+              </div>
+            )}
+
+            <Btn onClick={submitTemplate} disabled={submittingTmpl || !tmplText.trim()}>
+              {submittingTmpl ? '⏳ Отправляю в Meta...' : '🚀 Отправить на подтверждение'}
+            </Btn>
+          </Card>
+
+          {/* Templates list */}
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0' }}>📋 Мои шаблоны</div>
+              <button onClick={syncTemplates} style={{
+                fontSize: 12, color: GOLD, background: 'none', border: 'none', cursor: 'pointer',
+              }}>🔄 Синхронизировать статусы</button>
+            </div>
+            {tmplLoading ? (
+              <div style={{ color: MUTED, fontSize: 13 }}>Загрузка...</div>
+            ) : templates.length === 0 ? (
+              <div style={{ color: MUTED, fontSize: 13 }}>Шаблонов нет. Создайте первый выше.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {templates.map((t: any) => (
+                  <div key={t.id} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 14, padding: '12px 16px',
+                    borderRadius: 10, background: SURFACE2,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <code style={{ fontSize: 12, color: GOLD }}>{t.name}</code>
+                        <span style={{
+                          fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 12,
+                          background: `${tmplStatusColor(t.meta_status)}18`,
+                          color: tmplStatusColor(t.meta_status),
+                          border: `1px solid ${tmplStatusColor(t.meta_status)}30`,
+                        }}>{t.meta_status}</span>
+                        <span style={{ fontSize: 11, color: MUTED }}>{t.category} · {t.language}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#C0C0D0', lineHeight: 1.5 }}>{t.body_text}</div>
+                      <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{t.created_at}</div>
+                    </div>
+                    <button
+                      onClick={() => deleteTmplMutation.mutate(t.id)}
+                      style={{ background: 'none', border: 'none', color: '#E74C3C', cursor: 'pointer', fontSize: 16, padding: 4 }}
+                      title="Удалить"
+                    >🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {tab === 'send' && <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+        {/* Compose */}
+        <Card>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0', marginBottom: 20 }}>📢 Новая рассылка</div>
+
+          <div style={{ marginBottom: 16 }}>
+            <Label>Сообщение</Label>
+            <Input value={message} onChange={setMessage} rows={5} placeholder="Введите текст рассылки..." />
+          </div>
+
+          {result && (
+            <div style={{
+              marginBottom: 16, padding: '10px 14px', borderRadius: 8, fontSize: 13,
+              background: result.error ? 'rgba(231,76,60,0.1)' : 'rgba(39,174,96,0.1)',
+              border: `1px solid ${result.error ? 'rgba(231,76,60,0.3)' : 'rgba(39,174,96,0.3)'}`,
+              color: result.error ? '#E74C3C' : '#27AE60',
+            }}>
+              {result.error
+                ? `❌ ${result.error}`
+                : `✅ Отправлено: ${result.sent}, ошибок: ${result.failed}`}
+            </div>
           )}
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 1fr' }, gap: 3 }}>
-            <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
-                Основные параметры
-              </Typography>
+          <Btn
+            onClick={sendBroadcast}
+            disabled={sending || !message.trim() || selectedPhones.size === 0}
+          >
+            {sending ? '⏳ Отправка...' : `📤 Отправить (${selectedPhones.size} чел.)`}
+          </Btn>
+        </Card>
 
-              <Card sx={{ mb: 2, p: 2, bgcolor: 'rgba(2, 136, 209, 0.05)' }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                  <Switch
-                    checked={config.enabled}
-                    slotProps={{
-                      input: {
-                        onChange: (e) => handleChange('enabled', (e.target as HTMLInputElement).checked),
-                      },
+        {/* Client picker */}
+        <Card>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0' }}>
+              👥 Клиенты ({clients.length})
+            </div>
+            <button
+              onClick={toggleAll}
+              style={{ fontSize: 12, color: GOLD, background: 'none', border: 'none', cursor: 'pointer' }}
+            >
+              {selectedPhones.size === clients.length ? 'Снять всё' : 'Выбрать всех'}
+            </button>
+          </div>
+          {cLoading ? (
+            <div style={{ color: MUTED, fontSize: 13 }}>Загрузка клиентов...</div>
+          ) : (
+            <div style={{ maxHeight: 280, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {clients.map((c: any) => {
+                const sel = selectedPhones.has(c.phone);
+                return (
+                  <div
+                    key={c.phone}
+                    onClick={() => toggleClient(c.phone)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                      borderRadius: 8, cursor: 'pointer', transition: 'background 0.1s',
+                      background: sel ? `${GOLD}10` : SURFACE2,
+                      border: `1px solid ${sel ? GOLD + '40' : 'transparent'}`,
                     }}
-                  />
-                  <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
-                      Включить рассылку
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Активирует автоматическую отправку
-                    </Typography>
-                  </Box>
-                </Box>
-              </Card>
+                  >
+                    <div style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      background: sel ? GOLD : SURFACE, border: `1.5px solid ${sel ? GOLD : BORDER}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 10, color: '#0D0D12', fontWeight: 800,
+                    }}>{sel ? '✓' : ''}</div>
+                    <span style={{ fontSize: 13, color: '#F0F0F0' }}>{c.name}</span>
+                    <span style={{ fontSize: 12, color: MUTED, marginLeft: 'auto' }}>{c.phone}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
 
-              <Divider sx={{ my: 2 }} />
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Клиенты из Alteegio
-              </Typography>
-              <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                <Button
-                  variant="outlined"
-                  onClick={loadClients}
-                  disabled={clientsLoading}
-                >
-                  {clientsLoading ? 'Загрузка...' : 'Загрузить клиентов'}
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => setSelectedClients(clients)}
-                  disabled={!clients.length}
-                >
-                  Выбрать всех
-                </Button>
-              </Box>
-              {clientsError && (
-                <Typography color="error" variant="body2" sx={{ mb: 2 }}>
-                  {clientsError}
-                </Typography>
-              )}
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                Выбрано получателей: {recipientPhones.length}. Дубли автоматически удалены.
-              </Typography>
-              <Autocomplete
-                multiple
-                options={clients}
-                getOptionLabel={(option) => `${option.name} ${option.phone}`}
-                value={selectedClients}
-                onChange={(_, value) => setSelectedClients(value)}
-                disableCloseOnSelect
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Выберите получателей"
-                    placeholder="Найти клиента"
-                    sx={{ mb: 2 }}
-                  />
-                )}
-                renderOption={(props, option, { selected }) => (
-                  <li {...props}>
-                    <Chip
-                      label={`${option.name} ${option.phone}`}
-                      variant={selected ? 'filled' : 'outlined'}
-                      color={selected ? 'primary' : 'default'}
-                      sx={{ mr: 1 }}
-                    />
-                  </li>
-                )}
-              />
-
-              <Divider sx={{ my: 2 }} />
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Номера телефонов для рассылки
-              </Typography>
-              <TextField
-                fullWidth
-                multiline
-                rows={4}
-                value={config.phoneNumbers}
-                onChange={(e) => handleChange('phoneNumbers', e.target.value)}
-                placeholder="Один номер на строку\nПример:\n+77001234567\n+77009876543"
-                sx={{ mb: 2 }}
-              />
-
-              <Divider sx={{ my: 2 }} />
-
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                Шаблон сообщения
-              </Typography>
-              <TextField
-                fullWidth
-                multiline
-                rows={4}
-                value={config.messageTemplate}
-                onChange={(e) => handleChange('messageTemplate', e.target.value)}
-                placeholder="Введите текст сообщения\n\nДоступные переменные:\n{name} - имя клиента"
-                sx={{ mb: 2 }}
-              />
-
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  startIcon={<SaveIcon />}
-                  onClick={handleSave}
-                  size="large"
-                  disabled={loading}
-                >
-                  {loading ? 'Сохраняем...' : 'Сохранить настройки'}
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={handleSendNow}
-                  size="large"
-                  disabled={sending}
-                >
-                  {sending ? 'Отправляем...' : (scheduledAt ? 'Запланировать' : 'Отправить сейчас')}
-                </Button>
-              </Box>
-
-              {sendResult && (
-                <Paper sx={{ mt: 2, p: 2, bgcolor: 'info.light' }}>
-                  <Typography variant="body2" color="text.secondary">
-                    {sendResult}
-                  </Typography>
-                </Paper>
-              )}
-            </Paper>
-
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Card sx={{ p: 2 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 2 }}>
-                  Запланировать отправку
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-                  Оставьте пустым, чтобы отправить мгновенно. Иначе рассылка уйдет в выбранное время.
-                </Typography>
-                <TextField
-                  type="datetime-local"
-                  fullWidth
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                  size="small"
-                  slotProps={{ inputLabel: { shrink: true } }}
-                />
-              </Card>
-
-              <Card sx={{ p: 2, bgcolor: config.enabled ? 'success.light' : 'rgba(2, 136, 209, 0.05)' }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
-                  Статус системы (Авто-напоминания)
-                </Typography>
-                <Typography variant="body2" color={config.enabled ? 'success.main' : 'text.secondary'}>
-                  {config.enabled ? '✓ Автоматические уведомления активны' : '○ Автоматические уведомления отключены'}
-                </Typography>
-              </Card>
-            </Box>
-          </Box>
-        </>
-      )}
-
-      {tab === 1 && (
-        <Paper sx={{ p: 3 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-              История рассылок
-            </Typography>
-            <Button variant="outlined" onClick={loadBroadcasts}>
-              Обновить
-            </Button>
-          </Box>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ bgcolor: 'rgba(0,0,0,0.02)' }}>
-                  <TableCell>ID</TableCell>
-                  <TableCell>Создано / Запланировано</TableCell>
-                  <TableCell>Текст (начало)</TableCell>
-                  <TableCell>Аудитория</TableCell>
-                  <TableCell>Статус</TableCell>
-                  <TableCell align="right">Действия</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {broadcasts.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                      Нет данных о рассылках
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  broadcasts.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell>{row.id}</TableCell>
-                      <TableCell>
-                        <Typography variant="body2">Создано: {new Date(row.created_at).toLocaleString()}</Typography>
-                        {row.scheduled_at && (
-                          <Typography variant="body2" color="primary">
-                            План: {new Date(row.scheduled_at).toLocaleString()}
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                          {row.message}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2">{row.recipients_count} получателей</Typography>
-                        {(row.sent_count > 0 || row.failed_count > 0) && (
-                          <Typography variant="caption" color="text.secondary">
-                            Успешно: {row.sent_count}, Ошибок: {row.failed_count}
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={row.status === 'scheduled' ? 'Запланировано' : row.status === 'sending' ? 'Отправляется' : row.status === 'completed' ? 'Завершено' : 'Ошибка'}
-                          color={row.status === 'scheduled' ? 'warning' : row.status === 'sending' ? 'info' : row.status === 'completed' ? 'success' : 'error'}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        {row.status === 'scheduled' && (
-                          <IconButton onClick={() => handleDeleteBroadcast(row.id)} color="error" title="Отменить">
-                            <DeleteIcon />
-                          </IconButton>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
-      )}
-    </Box>
+      {/* History */}
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#D0D0D0', marginBottom: 16 }}>📋 История рассылок</div>
+        {broadcasts.length === 0 ? (
+          <div style={{ color: MUTED, fontSize: 13 }}>Рассылок нет</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {broadcasts.map((b: any) => (
+              <div key={b.id} style={{
+                display: 'flex', alignItems: 'center', gap: 16, padding: '12px 16px',
+                borderRadius: 10, background: SURFACE2,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 13, color: '#F0F0F0', marginBottom: 4,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{b.message}</div>
+                  <div style={{ fontSize: 11, color: MUTED }}>
+                    {b.createdAt?.split('T')[0]} · Получателей: {b.recipientCount} · Отправлено: {b.sentCount} · Ошибок: {b.failedCount}
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
+                  background: `${statusColor(b.status)}18`, color: statusColor(b.status),
+                  border: `1px solid ${statusColor(b.status)}30`, flexShrink: 0,
+                }}>{b.status}</span>
+                <button
+                  onClick={() => delMutation.mutate(b.id)}
+                  style={{ background: 'none', border: 'none', color: '#E74C3C', cursor: 'pointer', fontSize: 16, padding: 4 }}
+                  title="Удалить"
+                >🗑</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+      </>}
+    </div>
   );
 }

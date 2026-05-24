@@ -9,7 +9,8 @@ from datetime import datetime
 from ..database import (
     init_db, get_logs, get_broadcasts, add_broadcast, update_broadcast_summary,
     add_broadcast_log, delete_broadcast, verify_user, get_broadcast_settings,
-    update_broadcast_settings
+    update_broadcast_settings, get_bot_settings, update_bot_settings,
+    get_waba_templates, add_waba_template, update_waba_template_status, delete_waba_template,
 )
 from ..services.alteegio_service import alteegio_service
 from ..services.whatsapp_service import whatsapp_service
@@ -41,6 +42,15 @@ class BroadcastSettingsUpdate(BaseModel):
     messageTemplate: str
     schedule: str
     sendTime: str
+
+class BotSettingsUpdate(BaseModel):
+    chatbot_enabled: bool
+    excluded_master_ids: list[int]
+
+class WabaTemplateCreate(BaseModel):
+    body_text: str
+    category: str = "MARKETING"
+    language: str = "ru"
 
 # Simple token verification
 def verify_token(authorization: Optional[str] = Header(None)):
@@ -413,3 +423,87 @@ async def list_broadcast_clients(days: int = 30, token: str = Depends(verify_tok
         return {"items": clients, "count": len(clients)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Bot settings ─────────────────────────────────────────────────────────────
+
+@router.get("/bot-settings")
+async def get_bot_settings_route(token: str = Depends(verify_token)):
+    """Возвращает настройки бота: включён/выключен + список скрытых мастеров."""
+    return get_bot_settings()
+
+
+@router.put("/bot-settings")
+async def update_bot_settings_route(data: BotSettingsUpdate, token: str = Depends(verify_token)):
+    """Обновляет настройки бота."""
+    return update_bot_settings(data.chatbot_enabled, data.excluded_master_ids)
+
+
+# ─── WABA Templates ───────────────────────────────────────────────────────────
+
+@router.get("/waba-templates")
+async def list_waba_templates(sync: bool = False, token: str = Depends(verify_token)):
+    """Возвращает список шаблонов из локальной БД.
+    Если sync=true — сначала синхронизирует статусы с Meta."""
+    if sync:
+        meta_result = await whatsapp_service.get_meta_templates()
+        if "templates" in meta_result:
+            for tmpl in meta_result["templates"]:
+                update_waba_template_status(
+                    tmpl.get("name", ""),
+                    tmpl.get("status", "PENDING"),
+                    tmpl.get("id")
+                )
+    return {"templates": get_waba_templates()}
+
+
+@router.post("/waba-templates")
+async def create_waba_template(data: WabaTemplateCreate, token: str = Depends(verify_token)):
+    """Создаёт шаблон в Meta и сохраняет его в локальной БД."""
+    import re, time
+    # Generate safe template name: khan_<slug>_<ts>
+    slug = re.sub(r'[^a-zа-яёА-ЯЁa-zA-Z0-9]+', '_', data.body_text[:30].lower()).strip('_')
+    # Transliterate common Cyrillic → Latin for Meta name (must be latin)
+    translit = {
+        'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh','з':'z',
+        'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
+        'с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh',
+        'щ':'sch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+    }
+    slug_latin = ''.join(translit.get(c, c) for c in slug)
+    slug_latin = re.sub(r'[^a-z0-9_]', '', slug_latin)[:20]
+    template_name = f"khan_{slug_latin}_{int(time.time()) % 100000}"
+
+    # Submit to Meta
+    meta_result = await whatsapp_service.submit_template_to_meta(
+        name=template_name,
+        body_text=data.body_text,
+        category=data.category,
+        language=data.language,
+    )
+
+    if "error" in meta_result:
+        # Save locally even if Meta submission failed (can retry later)
+        tmpl = add_waba_template(
+            template_name, data.body_text, data.category, data.language,
+            meta_status="ERROR", meta_id=None
+        )
+        return {
+            "template": tmpl,
+            "meta_error": meta_result["error"],
+            "warning": "Шаблон сохранён локально, но не был отправлен в Meta. Проверьте WHATSAPP_WABA_ID в .env"
+        }
+
+    tmpl = add_waba_template(
+        template_name, data.body_text, data.category, data.language,
+        meta_status=meta_result.get("meta_status", "PENDING"),
+        meta_id=meta_result.get("meta_id")
+    )
+    return {"template": tmpl, "meta_result": meta_result}
+
+
+@router.delete("/waba-templates/{template_id}")
+async def delete_waba_template_route(template_id: int, token: str = Depends(verify_token)):
+    """Удаляет шаблон из локальной БД."""
+    delete_waba_template(template_id)
+    return {"success": True}

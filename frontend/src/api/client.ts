@@ -145,4 +145,28 @@ export const api = {
     const response = await apiClient.put('/settings', settings);
     return response.data;
   },
+
+  // Bot settings (chatbot on/off + excluded masters)
+  getBotSettings: async () => {
+    const response = await apiClient.get('/bot-settings');
+    return response.data;
+  },
+  updateBotSettings: async (data: { chatbot_enabled: boolean; excluded_master_ids: number[] }) => {
+    const response = await apiClient.put('/bot-settings', data);
+    return response.data;
+  },
+
+  // WABA Templates
+  getWabaTemplates: async (sync = false) => {
+    const response = await apiClient.get(`/waba-templates?sync=${sync}`);
+    return response.data;
+  },
+  createWabaTemplate: async (data: { body_text: string; category?: string; language?: string }) => {
+    const response = await apiClient.post('/waba-templates', data);
+    return response.data;
+  },
+  deleteWabaTemplate: async (id: number) => {
+    const response = await apiClient.delete(`/waba-templates/${id}`);
+    return response.data;
+  },
 };

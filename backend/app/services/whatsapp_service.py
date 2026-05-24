@@ -136,6 +136,134 @@ class WhatsAppCloudService:
             logger.error(f"❌ Error sending WhatsApp Business Cloud API message: {e}")
             return {"error": str(e)}
 
+    # ─── Template Message Methods ─────────────────────────────────────────────
+
+    async def send_template_message(self, to: str, template_name: str,
+                                     language_code: str = 'ru',
+                                     body_params: list[str] | None = None) -> dict:
+        """Send an approved WhatsApp template message."""
+        if not self.is_configured():
+            return {"error": "WhatsApp Business Cloud API is not configured"}
+
+        normalized_to = self.normalize_phone_number(to)
+        url = f"{self.api_url}/{self.api_version}/{self.phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        components = []
+        if body_params:
+            components.append({
+                "type": "body",
+                "parameters": [{"type": "text", "text": p} for p in body_params]
+            })
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": normalized_to,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": language_code},
+                "components": components,
+            }
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+            data = response.json()
+            if response.status_code >= 400:
+                logger.error(f"❌ Template send error: {data}")
+                return {"error": str(data.get("error", data))}
+            messages = data.get("messages", [])
+            message_id = messages[0].get("id") if messages else None
+            logger.info(f"✅ Template '{template_name}' sent to {normalized_to}: {message_id}")
+            return {"sid": message_id, "status": "sent", "to": normalized_to}
+        except Exception as e:
+            logger.error(f"❌ Template send exception: {e}")
+            return {"error": str(e)}
+
+    async def submit_template_to_meta(self, name: str, body_text: str,
+                                       category: str = "MARKETING",
+                                       language: str = "ru") -> dict:
+        """Submit a new message template to Meta for approval.
+        Requires WHATSAPP_WABA_ID to be configured.
+        """
+        waba_id = settings.whatsapp_waba_id
+        if not waba_id:
+            return {"error": "WHATSAPP_WABA_ID not configured in .env"}
+        if not self.access_token:
+            return {"error": "WHATSAPP_ACCESS_TOKEN not configured"}
+
+        url = f"{self.api_url}/{self.api_version}/{waba_id}/message_templates"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "name": name,
+            "category": category,
+            "allow_category_change": True,
+            "language": language,
+            "components": [
+                {"type": "BODY", "text": body_text}
+            ]
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+            data = response.json()
+            if response.status_code >= 400:
+                error = data.get("error", {})
+                logger.error(f"❌ Template submission error: {error}")
+                return {"error": str(error.get("message", error))}
+            meta_id = data.get("id")
+            meta_status = data.get("status", "PENDING")
+            logger.info(f"✅ Template '{name}' submitted to Meta: id={meta_id} status={meta_status}")
+            return {"meta_id": meta_id, "meta_status": meta_status, "name": name}
+        except Exception as e:
+            logger.error(f"❌ Template submission exception: {e}")
+            return {"error": str(e)}
+
+    async def get_meta_templates(self) -> dict:
+        """Fetch all message templates from Meta for this WABA."""
+        waba_id = settings.whatsapp_waba_id
+        if not waba_id:
+            return {"error": "WHATSAPP_WABA_ID not configured in .env", "templates": []}
+        if not self.access_token:
+            return {"error": "WHATSAPP_ACCESS_TOKEN not configured", "templates": []}
+
+        url = f"{self.api_url}/{self.api_version}/{waba_id}/message_templates"
+        params = {"access_token": self.access_token, "limit": 100,
+                  "fields": "id,name,status,category,language,components"}
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.get(url, params=params)
+            data = response.json()
+            if response.status_code >= 400:
+                return {"error": str(data.get("error", data)), "templates": []}
+            templates = data.get("data", [])
+            return {"templates": templates}
+        except Exception as e:
+            return {"error": str(e), "templates": []}
+
+    async def delete_meta_template(self, name: str) -> dict:
+        """Delete a template from Meta by name."""
+        waba_id = settings.whatsapp_waba_id
+        if not waba_id or not self.access_token:
+            return {"error": "WABA not configured"}
+        url = f"{self.api_url}/{self.api_version}/{waba_id}/message_templates"
+        params = {"access_token": self.access_token, "name": name}
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.delete(url, params=params)
+            if response.status_code >= 400:
+                return {"error": str(response.json())}
+            return {"success": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ─── Reminder helpers ────────────────────────────────────────────────────
+
     async def send_one_hour_reminder(self, to: str, client_name: str, master_name: str, datetime_str: str) -> dict:
         message = f"""
 ⏳ Ждём вас через час!
